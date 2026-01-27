@@ -174,15 +174,15 @@ kapsule/
 Add to `~/.config/kde-builder.yaml`:
 
 ```yaml
-# Custom project: Kapsule
+# Kapsule - from personal invent.kde.org repository
 project kapsule:
-  repository: https://invent.kde.org/utilities/kapsule.git
+  repository: kde:fernando/kapsule
   branch: main
-  # Meson handles Python, CMake handles C++/Qt parts
   override-build-system: meson
   meson-options: -Dkde_components=true
 
-# KDE dependencies needed for the Qt components
+# KDE dependencies for the Qt/KDE components (optional - only needed if 
+# building KDE components and not using distro packages)
 group kapsule-kde-deps:
   repository: kde-projects
   use-projects:
@@ -194,6 +194,10 @@ group kapsule-kde-deps:
     - frameworks/kirigami
     - plasma/libplasma
 ```
+
+> **Note:** The `kde:` prefix is a shortcut for `https://invent.kde.org/`. 
+> Once kapsule moves to an official KDE location (e.g., `utilities/kapsule`), 
+> it can be added to `sysadmin/repo-metadata` for automatic dependency resolution.
 
 ### Build Commands
 
