@@ -212,18 +212,18 @@ if(BUILD_KDE_COMPONENTS)
     )
 
     # Build libkapsule-qt
-    add_subdirectory(kde/libkapsule-qt)
+    add_subdirectory(src/libkapsule-qt)
 
     if(KF6KIO_FOUND)
-        # add_subdirectory(kde/kio)  # TODO: Enable when KIO worker is implemented
+        # add_subdirectory(src/kio)  # TODO: Enable when KIO worker is implemented
     endif()
 
     if(Plasma_FOUND)
-        # add_subdirectory(kde/plasmoid)  # TODO: Enable when plasmoid is implemented
+        # add_subdirectory(src/plasmoid)  # TODO: Enable when plasmoid is implemented
     endif()
 
     if(KF6KCMUtils_FOUND)
-        # add_subdirectory(kde/kcm)  # TODO: Enable when KCM is implemented
+        # add_subdirectory(src/kcm)  # TODO: Enable when KCM is implemented
     endif()
 endif()
 
