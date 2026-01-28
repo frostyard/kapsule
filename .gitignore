@@ -1,3 +1,5 @@
 arch-container
 .vscode
 .cache
+
+**/__pycache__/
