@@ -9,17 +9,18 @@ A distrobox-like tool using Incus as the container/VM backend,
 with native KDE/Plasma integration.
 """
 
-import asyncio
+from typing import Optional
+
 import typer
 from rich.console import Console
 from rich.table import Table
-from typing import Optional
 
 from . import __version__
+from .async_typer import AsyncTyper
 from .incus_client import IncusClient, IncusError
 
 # Create the main Typer app
-app = typer.Typer(
+app = AsyncTyper(
     name="kapsule",
     help="Incus-based container management with KDE integration",
     add_completion=True,
@@ -116,7 +117,7 @@ def enter(
 
 
 @app.command(name="list")
-def list_containers(
+async def list_containers(
     all_containers: bool = typer.Option(
         False,
         "--all",
@@ -125,51 +126,48 @@ def list_containers(
     ),
 ) -> None:
     """List kapsule containers."""
-    async def _list() -> None:
-        client = IncusClient()
-        try:
-            if not await client.is_available():
-                console.print("[red]Error:[/red] Incus is not available. Is the service running?")
-                raise typer.Exit(1)
+    client = IncusClient()
+    try:
+        if not await client.is_available():
+            console.print("[red]Error:[/red] Incus is not available. Is the service running?")
+            raise typer.Exit(1)
 
-            containers = await client.list_containers()
+        containers = await client.list_containers()
 
+        if not containers:
+            console.print("[dim]No containers found.[/dim]")
+            return
+
+        # Filter stopped containers if --all not specified
+        if not all_containers:
+            containers = [c for c in containers if c.status.lower() == "running"]
             if not containers:
-                console.print("[dim]No containers found.[/dim]")
+                console.print("[dim]No running containers. Use --all to see stopped containers.[/dim]")
                 return
 
-            # Filter stopped containers if --all not specified
-            if not all_containers:
-                containers = [c for c in containers if c.status.lower() == "running"]
-                if not containers:
-                    console.print("[dim]No running containers. Use --all to see stopped containers.[/dim]")
-                    return
+        # Build table
+        table = Table(title="Kapsule Containers")
+        table.add_column("Name", style="cyan", no_wrap=True)
+        table.add_column("Status", style="green")
+        table.add_column("Image", style="yellow")
+        table.add_column("Created", style="dim")
 
-            # Build table
-            table = Table(title="Kapsule Containers")
-            table.add_column("Name", style="cyan", no_wrap=True)
-            table.add_column("Status", style="green")
-            table.add_column("Image", style="yellow")
-            table.add_column("Created", style="dim")
+        for c in containers:
+            status_style = "green" if c.status.lower() == "running" else "red"
+            table.add_row(
+                c.name,
+                f"[{status_style}]{c.status}[/{status_style}]",
+                c.image,
+                c.created[:10] if c.created else "",  # Just the date part
+            )
 
-            for c in containers:
-                status_style = "green" if c.status.lower() == "running" else "red"
-                table.add_row(
-                    c.name,
-                    f"[{status_style}]{c.status}[/{status_style}]",
-                    c.image,
-                    c.created[:10] if c.created else "",  # Just the date part
-                )
+        console.print(table)
 
-            console.print(table)
-
-        except IncusError as e:
-            console.print(f"[red]Incus error:[/red] {e}")
-            raise typer.Exit(1)
-        finally:
-            await client.close()
-
-    asyncio.run(_list())
+    except IncusError as e:
+        console.print(f"[red]Incus error:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        await client.close()
 
 
 @app.command()
