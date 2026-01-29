@@ -15,8 +15,8 @@ from rich.console import Console
 from rich.table import Table
 from typing import Optional
 
-from kapsule import __version__
-from kapsule.incus_client import IncusClient, IncusError
+from . import __version__
+from .incus_client import IncusClient, IncusError
 
 # Create the main Typer app
 app = typer.Typer(
