@@ -9,6 +9,8 @@ A distrobox-like tool using Incus as the container/VM backend,
 with native KDE/Plasma integration.
 """
 
+import os
+import subprocess
 from typing import Optional
 
 import typer
@@ -116,6 +118,57 @@ def enter(
     console.print("[yellow]⚠ Stub implementation - not yet functional[/yellow]")
 
 
+@app.command()
+def init() -> None:
+    """Initialize kapsule by enabling and starting incus sockets.
+
+    This command must be run as root (sudo).
+    """
+    if os.geteuid() != 0:
+        console.print("[red]Error:[/red] This command must be run as root.")
+        console.print("[yellow]Hint:[/yellow] Run: [bold]sudo kapsule init[/bold]")
+        raise typer.Exit(1)
+
+    console.print("[bold blue]Initializing kapsule...[/bold blue]")
+
+    # Restart systemd-sysusers to ensure incus groups are created
+    console.print("  Restarting systemd-sysusers...")
+    try:
+        subprocess.run(
+            ["systemd-sysusers"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("    [green]✓[/green] systemd-sysusers completed")
+    except subprocess.CalledProcessError as e:
+        console.print(f"    [red]✗[/red] Failed to run systemd-sysusers: {e.stderr.strip()}")
+        raise typer.Exit(1)
+
+    # List of socket/service units to enable
+    units = [
+        "incus.socket",
+        "incus-user.socket",
+    ]
+
+    for unit in units:
+        console.print(f"  Enabling and starting {unit}...")
+        try:
+            subprocess.run(
+                ["systemctl", "enable", "--now", unit],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            console.print(f"    [green]✓[/green] {unit} enabled and started")
+        except subprocess.CalledProcessError as e:
+            console.print(f"    [red]✗[/red] Failed to enable {unit}: {e.stderr.strip()}")
+            raise typer.Exit(1)
+
+    console.print("[bold green]✓ Kapsule initialized successfully![/bold green]")
+    console.print("[dim]You can now use kapsule commands as a regular user.[/dim]")
+
+
 @app.command(name="list")
 async def list_containers(
     all_containers: bool = typer.Option(
@@ -129,7 +182,8 @@ async def list_containers(
     client = IncusClient()
     try:
         if not await client.is_available():
-            console.print("[red]Error:[/red] Incus is not available. Is the service running?")
+            console.print("[red]Error:[/red] Incus is not available.")
+            console.print("[yellow]Hint:[/yellow] Run: [bold]sudo kapsule init[/bold] to enable incus sockets.")
             raise typer.Exit(1)
 
         containers = await client.list_containers()
