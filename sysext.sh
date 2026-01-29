@@ -2,30 +2,43 @@
 
 set -xe
 
+# Parse CLI options
+clean=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --clean)
+            clean=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--clean]"
+            echo "  --clean    Force re-run pacstrap even if cache exists"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+pacstrap_dir=~/src/kde/sysext/kapsule-pacstrap
 install_dir=~/src/kde/sysext/kapsule
+
+# Clean and recreate install directory
 sudo rm -rf "$install_dir"
 mkdir -p "$install_dir"
 
+# Start by building kapsule with kde-builder
 kde-builder --no-src --build-when-unchanged kapsule
-sudo pacstrap -c "$install_dir" incus
-
-# Remove files that already exist in the KDE Linux base system
-# to avoid duplicating ~430k files in the sysext
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$script_dir/kde-linux-file-list.txt" ]]; then
-    echo "Removing files already in base system..."
-    # Use sed to prepend install_dir to each path, xargs for efficient batch removal
-    sed "s|^|${install_dir}|" "$script_dir/kde-linux-file-list.txt" | xargs -d '\n' rm -f 2>/dev/null || true
-    # Clean up empty directories left behind
-    find "$install_dir" -type d -empty -delete 2>/dev/null || true
-fi
 
 # Create extension-release metadata for the sysext
 # This allows systemd-sysext to recognize and merge the extension
 # Using ID=_any so system updates don't break the extension
 extension_release_dir="$install_dir/usr/lib/extension-release.d"
-mkdir -p "$extension_release_dir"
-cat > "$extension_release_dir/extension-release.kapsule" << 'EOF'
+sudo mkdir -p "$extension_release_dir"
+sudo tee "$extension_release_dir/extension-release.kapsule" << 'EOF'
 NAME="KDE Linux"
 PRETTY_NAME="KDE Linux"
 ID=_any
@@ -33,6 +46,32 @@ VERSION_ID="2026-01-27"
 IMAGE_ID="kde-linux"
 IMAGE_VERSION="202601271004"
 EOF
+
+# Clean pacstrap cache if requested
+if [[ "$clean" == true ]] && [[ -d "$pacstrap_dir" ]]; then
+    echo "Cleaning pacstrap cache..."
+    sudo rm -rf "$pacstrap_dir"
+fi
+
+# Run pacstrap only if cache doesn't exist
+if [[ ! -d "$pacstrap_dir" ]]; then
+    echo "Running pacstrap..."
+    mkdir -p "$pacstrap_dir"
+    sudo pacstrap -c "$pacstrap_dir" incus
+    
+    # Remove files that already exist in the KDE Linux base system
+    if [[ -f "$script_dir/kde-linux-file-list.txt" ]]; then
+        echo "Removing base system files from pacstrap cache..."
+        sed "s|^|${pacstrap_dir}|" "$script_dir/kde-linux-file-list.txt" | xargs -d '\n' sudo rm -f 2>/dev/null || true
+        sudo find "$pacstrap_dir" -type d -empty -delete 2>/dev/null || true
+    fi
+else
+    echo "Using cached pacstrap directory..."
+fi
+
+# Hardlink files from pacstrap cache to install directory
+echo "Hardlinking files to install directory..."
+sudo cp -al "$pacstrap_dir/usr/." "$install_dir/usr/"
 
 serve_dir=/tmp/kapsule
 mkdir -p "$serve_dir"
