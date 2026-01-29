@@ -202,6 +202,12 @@ if(INSTALL_PYTHON_CLI)
         DESTINATION "${KAPSULE_SYSTEMD_SYSTEM_UNIT_DIR}"
     )
 
+    # Install drop-in for incus-user.socket to allow all users access
+    install(FILES
+        data/systemd/system/incus-user.socket.d/kapsule-socket-mode.conf
+        DESTINATION "${KAPSULE_SYSTEMD_SYSTEM_UNIT_DIR}/incus-user.socket.d"
+    )
+
     # Configure D-Bus system service (auto-activation)
     configure_file(
         data/dbus/system/org.kde.kapsule.service
