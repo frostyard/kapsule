@@ -43,7 +43,8 @@ Add to your `~/.config/kde-builder.yaml`:
 ```yaml
 project kapsule:
   repository: kde:fernando/kapsule
-  branch: main
+  branch: master
+  cmake-options: -DBUILD_KDE_COMPONENTS=ON -DINSTALL_PYTHON_CLI=ON -DVENDOR_PYTHON_DEPS=ON
 ```
 
 Then run:
@@ -51,6 +52,14 @@ Then run:
 ```bash
 kde-builder kapsule
 ```
+
+#### CMake Options
+
+| Option | Description |
+|--------|-------------|
+| `BUILD_KDE_COMPONENTS` | Build Qt/KDE libraries (libkapsule-qt) |
+| `INSTALL_PYTHON_CLI` | Install the Python CLI tool |
+| `VENDOR_PYTHON_DEPS` | Bundle Python dependencies with the installation |
 
 ## Commands
 
