@@ -21,8 +21,12 @@ from .models_generated import (
     InstanceStatePut,
     Operation,
     Profile,
+    ProfilePut,
     ProfilesPost,
     Server,
+    ServerPut,
+    StoragePool,
+    StoragePoolsPost,
 )
 
 
@@ -35,6 +39,19 @@ class InstanceList(RootModel[list[Instance]]):
 class StringList(RootModel[list[str]]):
     """List of string URLs/paths."""
     pass
+
+
+class StoragePoolList(RootModel[list[StoragePool]]):
+    """List of StoragePool objects."""
+    pass
+
+
+class EmptyResponse(BaseModel):
+    """Empty response from Incus API (for PUT/POST that return {})."""
+    pass
+
+    class Config:
+        extra = "allow"  # Allow any fields since response may be empty dict
 
 
 # Wrapper for async operation responses (the full response, not just metadata)
@@ -152,7 +169,10 @@ class IncusClient:
         if data.get("type") == "async":
             return response_type.model_validate(data)
 
-        metadata = data.get("metadata", data)
+        # Get metadata, defaulting to empty dict if None
+        metadata = data.get("metadata")
+        if metadata is None:
+            metadata = {}
         return response_type.model_validate(metadata)
 
     # -------------------------------------------------------------------------
@@ -281,7 +301,7 @@ class IncusClient:
         """
         await self._request(
             "POST", "/1.0/profiles",
-            response_type=StringList,  # Empty response, but typed
+            response_type=EmptyResponse,
             json=profile.model_dump(exclude_none=True),
         )
 
@@ -661,5 +681,139 @@ class IncusClient:
             "PUT",
             f"/1.0/instances/{name}",
             response_type=AsyncOperationResponse,
+            json=put_data.model_dump(exclude_none=True),
+        )
+
+    # -------------------------------------------------------------------------
+    # Storage pool operations
+    # -------------------------------------------------------------------------
+
+    async def list_storage_pools(self, recursion: int = 1) -> list[StoragePool]:
+        """List all storage pools.
+
+        Args:
+            recursion: 0 returns just URLs, 1 returns full objects.
+
+        Returns:
+            List of StoragePool objects.
+        """
+        if recursion == 0:
+            result = await self._request("GET", "/1.0/storage-pools", response_type=StringList)
+            return [
+                StoragePool(
+                    name=url.split("/")[-1],
+                    config=None,
+                    description=None,
+                    driver=None,
+                    locations=None,
+                    status=None,
+                    used_by=None,
+                )
+                for url in result.root
+            ]
+
+        result = await self._request(
+            "GET", f"/1.0/storage-pools?recursion={recursion}", response_type=StoragePoolList
+        )
+        return result.root
+
+    async def storage_pool_exists(self, name: str) -> bool:
+        """Check if a storage pool exists.
+
+        Args:
+            name: Storage pool name.
+
+        Returns:
+            True if the storage pool exists.
+        """
+        pools = await self.list_storage_pools(recursion=0)
+        return any(p.name == name for p in pools)
+
+    async def create_storage_pool(self, name: str, driver: str, config: dict[str, str] | None = None) -> None:
+        """Create a new storage pool.
+
+        Args:
+            name: Storage pool name.
+            driver: Storage driver (btrfs, dir, zfs, lvm, etc.).
+            config: Optional configuration map.
+        """
+        pool = StoragePoolsPost(
+            name=name,
+            driver=driver,
+            config=config,
+            description=None,
+        )
+        await self._request(
+            "POST", "/1.0/storage-pools",
+            response_type=EmptyResponse,
+            json=pool.model_dump(exclude_none=True),
+        )
+
+    # -------------------------------------------------------------------------
+    # Server configuration
+    # -------------------------------------------------------------------------
+
+    async def get_server(self) -> Server:
+        """Get server information and configuration.
+
+        Returns:
+            Server object with config and environment info.
+        """
+        return await self._request("GET", "/1.0", response_type=Server)
+
+    async def set_server_config(self, key: str, value: str) -> None:
+        """Set a server configuration value.
+
+        Args:
+            key: Configuration key.
+            value: Configuration value.
+        """
+        # Get current config to merge
+        server = await self.get_server()
+        current_config = server.config or {}
+        new_config = {**current_config, key: value}
+
+        put_data = ServerPut(config=new_config)
+        await self._request(
+            "PUT", "/1.0",
+            response_type=EmptyResponse,
+            json=put_data.model_dump(exclude_none=True),
+        )
+
+    # -------------------------------------------------------------------------
+    # Profile device operations
+    # -------------------------------------------------------------------------
+
+    async def add_profile_device(
+        self,
+        profile_name: str,
+        device_name: str,
+        device_config: dict[str, str],
+    ) -> None:
+        """Add a device to a profile.
+
+        Args:
+            profile_name: Profile name.
+            device_name: Name for the device.
+            device_config: Device configuration (type, path, pool, etc.).
+        """
+        # Get current profile
+        profile = await self.get_profile(profile_name)
+        current_devices = profile.devices or {}
+
+        # Add/update the device
+        merged_devices = {**current_devices, device_name: device_config}
+
+        # Use PUT with merged devices
+        put_data = ProfilePut(
+            config=profile.config,
+            description=profile.description,
+            devices=merged_devices,
+        )
+
+        await self._request(
+            "PUT",
+            f"/1.0/profiles/{profile_name}",
+            response_type=EmptyResponse,
             json=put_data.model_dump(exclude_none=True),
         )

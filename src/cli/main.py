@@ -311,7 +311,7 @@ async def enter(
 
 
 @app.command()
-def init() -> None:
+async def init() -> None:
     """Initialize kapsule by enabling and starting incus sockets.
 
     This command must be run as root (sudo).
@@ -323,7 +323,7 @@ def init() -> None:
 
     with out.operation("Initializing kapsule..."):
         # Restart systemd-sysusers to ensure incus groups are created
-        out.info("Restarting systemd-sysusers...")
+        out.info("Running systemd-sysusers...")
         try:
             subprocess.run(
                 ["systemd-sysusers"],
@@ -360,26 +360,60 @@ def init() -> None:
                     out.failure(f"Failed to enable {unit}: {e.stderr.strip()}")
                 raise typer.Exit(1)
 
-        # Initialize Incus with minimal settings (creates default storage pool)
-        out.info("Initializing Incus...")
-        try:
-            subprocess.run(
-                ["incus", "admin", "init", "--minimal"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+        # Now use the Incus API for remaining configuration
+        client = get_client()
+
+        # Create storage pool (we don't use incus admin init --minimal because
+        # it creates a network bridge we don't need - kapsule uses host networking)
+        out.info("Creating storage pool...")
+        if await client.storage_pool_exists("default"):
             with out.indent():
-                out.success("Incus initialized with default storage pool")
-        except subprocess.CalledProcessError as e:
-            # Check if already initialized
-            if "already exists" in e.stderr or "already initialized" in e.stderr.lower():
+                out.dim("Storage pool 'default' already exists")
+        else:
+            # Try btrfs first (supports copy-on-write, snapshots)
+            try:
+                await client.create_storage_pool("default", "btrfs")
                 with out.indent():
-                    out.dim("Incus already initialized")
+                    out.success("Storage pool 'default' created (btrfs backend)")
+            except IncusError:
+                # Fall back to dir driver (works everywhere)
+                try:
+                    await client.create_storage_pool("default", "dir")
+                    with out.indent():
+                        out.success("Storage pool 'default' created (dir backend)")
+                except IncusError as e:
+                    with out.indent():
+                        out.failure(f"Failed to create storage pool: {e}")
+                    raise typer.Exit(1)
+
+        # Disable automatic image updates (saves bandwidth, we don't need it)
+        out.info("Configuring Incus settings...")
+        try:
+            await client.set_server_config("images.auto_update_interval", "0")
+            with out.indent():
+                out.success("Disabled automatic image updates")
+        except IncusError as e:
+            with out.indent():
+                out.warning(f"Failed to set config: {e}")
+
+        # Add root device to default profile (for compatibility with other tools)
+        out.info("Configuring default profile...")
+        try:
+            profile = await client.get_profile("default")
+            if profile.devices and "root" in profile.devices:
+                with out.indent():
+                    out.dim("Default profile already configured")
             else:
+                await client.add_profile_device(
+                    "default",
+                    "root",
+                    {"type": "disk", "path": "/", "pool": "default"},
+                )
                 with out.indent():
-                    out.failure(f"Failed to initialize Incus: {e.stderr.strip()}")
-                raise typer.Exit(1)
+                    out.success("Added root device to default profile")
+        except IncusError as e:
+            with out.indent():
+                out.warning(f"Failed to configure default profile: {e}")
 
     out.section("✓ Kapsule initialized successfully!", color="green")
     out.dim("You can now use kapsule commands as a regular user.")
