@@ -122,16 +122,41 @@ async def create(
         console.print(f"[bold green]Creating container:[/bold green] {name}")
         console.print(f"  Image: {image}")
 
+        instance_source = InstanceSource(
+            type="image",
+            protocol="simplestreams",
+            server=server_url,
+            alias=image_alias,
+            allow_inconsistent=None,
+            certificate=None,
+            fingerprint=None,
+            instance_only=None,
+            live=None,
+            mode=None,
+            operation=None,
+            project=None,
+            properties=None,
+            refresh=None,
+            refresh_exclude_older=None,
+            secret=None,
+            secrets=None,
+            source=None,
+            **{"base-image": None},
+        )
         instance_config = InstancesPost(
             name=name,
             profiles=[KAPSULE_PROFILE_NAME],
-            source=InstanceSource(
-                type="image",
-                protocol="simplestreams",
-                server=server_url,
-                alias=image_alias,
-            ),
+            source=instance_source,
             start=True,
+            architecture=None,
+            config=None,
+            description=None,
+            devices=None,
+            ephemeral=None,
+            instance_type=None,
+            restore=None,
+            stateful=None,
+            type=None,
         )
 
         console.print("  Downloading image and creating container...")
