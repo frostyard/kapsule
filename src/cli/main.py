@@ -18,6 +18,7 @@ from rich.table import Table
 
 from . import __version__
 from .async_typer import AsyncTyper
+from .config import KapsuleConfig, get_config_path, get_config_paths, load_config, save_config
 from .decorators import require_incus
 from .incus_client import IncusError, get_client
 from .models_generated import InstanceSource, InstancesPost
@@ -61,24 +62,14 @@ def main(
     pass
 
 
-@app.command()
-@require_incus
-async def create(
-    name: str = typer.Argument(..., help="Name of the container to create"),
-    image: str = typer.Option(
-        "images:ubuntu/24.04",
-        "--image",
-        "-i",
-        help="Base image to use for the container (e.g., images:ubuntu/24.04)",
-    ),
-) -> None:
-    """Create a new kapsule container."""
-    client = get_client()
+async def _create_container(name: str, image: str) -> None:
+    """Create and start a container (internal implementation).
 
-    # Check if container already exists
-    if await client.instance_exists(name):
-        out.error(f"Container '{name}' already exists.")
-        raise typer.Exit(1)
+    Args:
+        name: Name for the container.
+        image: Image to use (e.g., 'images:ubuntu/24.04').
+    """
+    client = get_client()
 
     # Ensure the kapsule profile exists
     with out.operation(f"Ensuring profile: {KAPSULE_PROFILE_NAME}"):
@@ -157,6 +148,33 @@ async def create(
         out.success(f"Container '{name}' created successfully")
 
 
+@app.command()
+@require_incus
+async def create(
+    name: str = typer.Argument(..., help="Name of the container to create"),
+    image: Optional[str] = typer.Option(
+        None,
+        "--image",
+        "-i",
+        help="Base image to use for the container (e.g., images:ubuntu/24.04)",
+    ),
+) -> None:
+    """Create a new kapsule container."""
+    # Use default image from config if not specified
+    if image is None:
+        config = load_config()
+        image = config.default_image
+
+    client = get_client()
+
+    # Check if container already exists
+    if await client.instance_exists(name):
+        out.error(f"Container '{name}' already exists.")
+        raise typer.Exit(1)
+
+    await _create_container(name, image)
+
+
 # Environment variables to skip when passing through to container
 _ENTER_ENV_SKIP = frozenset({
     "_",              # Last command (set by shell)
@@ -177,14 +195,29 @@ _ENTER_ENV_SKIP = frozenset({
 @require_incus
 async def enter(
     ctx: typer.Context,
-    name: str = typer.Argument(..., help="Name of the container to enter"),
+    name: Optional[str] = typer.Argument(
+        None, help="Name of the container to enter (default: from config)"
+    ),
 ) -> None:
     """Enter a kapsule container.
+
+    If no container name is specified, enters the default container
+    (configured in ~/.config/kapsule/kapsule.conf). If the default
+    container doesn't exist, it will be created automatically.
 
     Optionally pass a command to run instead of an interactive shell:
 
         kapsule enter mycontainer -- ls -la
+        kapsule enter -- ls -la  # uses default container
     """
+    # Load config for defaults
+    config = load_config()
+
+    # Use default container name if not specified
+    if name is None:
+        name = config.default_container
+        out.info(f"Using default container: {name}")
+
     # Get user info
     uid = os.getuid()
     gid = os.getgid()
@@ -193,12 +226,18 @@ async def enter(
 
     client = get_client()
 
-    # Get instance and check it's running
+    # Get instance - create if it doesn't exist and using default
     try:
         instance = await client.get_instance(name)
     except IncusError:
-        out.error(f"Container '{name}' does not exist.")
-        raise typer.Exit(1)
+        # Container doesn't exist - create it if using default
+        if name == config.default_container:
+            out.warning(f"Default container '{name}' does not exist, creating it...")
+            await _create_container(name, config.default_image)
+            instance = await client.get_instance(name)
+        else:
+            out.error(f"Container '{name}' does not exist.")
+            raise typer.Exit(1)
 
     if instance.status != "Running":
         out.error(
@@ -209,10 +248,10 @@ async def enter(
         raise typer.Exit(1)
 
     # Check if user is already mapped in this container
-    config = instance.config or {}
+    instance_config = instance.config or {}
     user_mapped_key = f"user.kapsule.host-users.{uid}.mapped"
 
-    if config.get(user_mapped_key) != "true":
+    if instance_config.get(user_mapped_key) != "true":
         with out.operation(f"Setting up user '{username}' in container..."):
             # Add disk device to mount host home directory into container
             home_basename = os.path.basename(home_dir)
@@ -592,6 +631,71 @@ async def stop(
             raise typer.Exit(1)
 
         out.success(f"Container '{name}' stopped successfully")
+
+
+@app.command(name="config")
+def config_cmd(
+    key: Optional[str] = typer.Argument(
+        None, help="Config key to get/set (default_container, default_image)"
+    ),
+    value: Optional[str] = typer.Argument(None, help="Value to set (omit to get)"),
+) -> None:
+    """View or modify kapsule configuration.
+
+    Configuration is read from (highest to lowest priority):
+      1. ~/.config/kapsule/kapsule.conf  (user)
+      2. /etc/kapsule/kapsule.conf       (system)
+      3. /usr/lib/kapsule/kapsule.conf   (package defaults)
+
+    User config is written to ~/.config/kapsule/kapsule.conf
+
+    Examples:
+        kapsule config                    # Show all config
+        kapsule config default_container  # Get default_container value
+        kapsule config default_container mybox  # Set default_container
+        kapsule config default_image images:fedora/40  # Set default_image
+    """
+    config = load_config()
+    config_path = get_config_path()
+
+    if key is None:
+        # Show all config paths
+        out.info("Config paths (highest priority first):")
+        for path in get_config_paths():
+            exists = "✓" if path.exists() else "✗"
+            out.info(f"  {exists} {path}")
+        out.info("")
+        out.info(f"User config (for writes): {config_path}")
+        out.info("")
+        table = Table(show_header=True)
+        table.add_column("Setting", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_row("default_container", config.default_container)
+        table.add_row("default_image", config.default_image)
+        out.console.print(table)
+        return
+
+    # Validate key
+    valid_keys = ["default_container", "default_image"]
+    if key not in valid_keys:
+        out.error(f"Unknown config key: {key}")
+        out.hint(f"Valid keys: {', '.join(valid_keys)}")
+        raise typer.Exit(1)
+
+    if value is None:
+        # Get value
+        current_value = getattr(config, key)
+        out.info(f"{key} = {current_value}")
+    else:
+        # Set value
+        new_config = KapsuleConfig(
+            default_container=(
+                value if key == "default_container" else config.default_container
+            ),
+            default_image=value if key == "default_image" else config.default_image,
+        )
+        save_config(new_config)
+        out.success(f"Set {key} = {value}")
 
 
 def cli() -> None:

@@ -72,6 +72,7 @@ if(INSTALL_PYTHON_CLI)
     install(FILES
         src/cli/__init__.py
         src/cli/async_typer.py
+        src/cli/config.py
         src/cli/decorators.py
         src/cli/incus_client.py
         src/cli/main.py
@@ -246,6 +247,12 @@ if(INSTALL_PYTHON_CLI)
     install(FILES
         data/dbus/system/org.kde.kapsule.conf
         DESTINATION "${KAPSULE_DBUS_SYSTEM_POLICY_DIR}"
+    )
+
+    # Kapsule default configuration
+    install(FILES
+        data/kapsule.conf
+        DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/kapsule"
     )
 endif()
 
