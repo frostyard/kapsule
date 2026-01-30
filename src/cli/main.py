@@ -10,6 +10,7 @@ with native KDE/Plasma integration.
 """
 
 import os
+import shlex
 import subprocess
 from typing import Optional
 
@@ -175,22 +176,177 @@ async def create(
         await client.close()
 
 
-@app.command()
+# Environment variables to skip when passing through to container
+_ENTER_ENV_SKIP = frozenset({
+    "_",              # Last command (set by shell)
+    "SHLVL",          # Shell nesting level
+    "OLDPWD",         # Previous directory
+    "PWD",            # Current directory (will be wrong in container)
+    "HOSTNAME",       # Host's hostname
+    "HOST",           # Host's hostname (zsh)
+    "LS_COLORS",      # Often huge and causes issues
+    "LESS_TERMCAP_mb", "LESS_TERMCAP_md", "LESS_TERMCAP_me",  # Less colors
+    "LESS_TERMCAP_se", "LESS_TERMCAP_so", "LESS_TERMCAP_ue", "LESS_TERMCAP_us",
+})
+
+
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
+)
 def enter(
+    ctx: typer.Context,
     name: str = typer.Argument(..., help="Name of the container to enter"),
-    command: Optional[str] = typer.Option(
-        None,
-        "--command",
-        "-c",
-        help="Command to run instead of default shell",
-    ),
 ) -> None:
-    """Enter a kapsule container."""
-    console.print(f"[bold blue]Entering container:[/bold blue] {name}")
-    if command:
-        console.print(f"  Running: {command}")
-    # TODO: Implement container entry via Incus REST API
-    console.print("[yellow]⚠ Stub implementation - not yet functional[/yellow]")
+    """Enter a kapsule container.
+
+    Optionally pass a command to run instead of an interactive shell:
+
+        kapsule enter mycontainer -- ls -la
+    """
+    import asyncio
+
+    # Get user info
+    uid = os.getuid()
+    gid = os.getgid()
+    username = os.environ.get("USER") or os.environ.get("LOGNAME") or "root"
+    home_dir = os.environ.get("HOME") or f"/home/{username}"
+
+    async def setup_and_enter() -> None:
+        """Check container, map user if needed, then set up runtime dir."""
+        client = IncusClient()
+        try:
+            # Check Incus is available
+            if not await client.is_available():
+                console.print("[red]Error:[/red] Cannot connect to Incus.")
+                raise typer.Exit(1)
+
+            # Get instance and check it's running
+            try:
+                instance = await client.get_instance(name)
+            except IncusError:
+                console.print(f"[red]Error:[/red] Container '{name}' does not exist.")
+                raise typer.Exit(1)
+
+            if instance.status != "Running":
+                console.print(
+                    f"[red]Error:[/red] Container '{name}' is not running "
+                    f"(status: {instance.status})."
+                )
+                console.print(
+                    f"[yellow]Hint:[/yellow] Start it with: incus start {name}"
+                )
+                raise typer.Exit(1)
+
+            # Check if user is already mapped in this container
+            config = instance.config or {}
+            user_mapped_key = f"user.kapsule.host-users.{uid}.mapped"
+
+            if config.get(user_mapped_key) != "true":
+                console.print(f"[bold blue]Setting up user '{username}' in container...[/bold blue]")
+
+                # Add disk device to mount host home directory into container
+                home_basename = os.path.basename(home_dir)
+                container_home = f"/home/{home_basename}"
+                device_name = f"kapsule-home-{username}"
+
+                console.print(f"  Mounting home directory: {home_dir} -> {container_home}")
+                await client.add_instance_device(
+                    name,
+                    device_name,
+                    {
+                        "type": "disk",
+                        "source": home_dir,
+                        "path": container_home,
+                    },
+                )
+
+                # Create group (allow duplicate GID with -o)
+                console.print(f"  Creating group '{username}' (gid={gid})")
+                result = subprocess.run(
+                    ["incus", "exec", name, "--", "groupadd", "-o", "-g", str(gid), username],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0 and "already exists" not in result.stderr:
+                    console.print(f"  [yellow]Warning:[/yellow] groupadd: {result.stderr.strip()}")
+
+                # Create user (without home directory since we symlinked it, allow duplicate UID with -o)
+                console.print(f"  Creating user '{username}' (uid={uid})")
+                result = subprocess.run(
+                    [
+                        "incus", "exec", name, "--",
+                        "useradd",
+                        "-o",           # Allow duplicate UID
+                        "-M",           # Don't create home directory
+                        "-u", str(uid),
+                        "-g", str(gid),
+                        "-d", container_home,
+                        "-s", "/bin/bash",
+                        username,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0 and "already exists" not in result.stderr:
+                    console.print(f"  [yellow]Warning:[/yellow] useradd: {result.stderr.strip()}")
+
+                # Mark user as mapped in container config
+                await client.patch_instance_config(name, {user_mapped_key: "true"})
+                console.print(f"  [green]✓[/green] User '{username}' configured")
+
+            # Create symlink for XDG_RUNTIME_DIR: /run/user/{uid} -> /.kapsule/host/run/user/{uid}
+            runtime_dir = f"/run/user/{uid}"
+            host_runtime_dir = f"/.kapsule/host/run/user/{uid}"
+            try:
+                # Ensure /run/user exists
+                await client.mkdir(name, "/run/user", uid=0, gid=0, mode="0755")
+            except IncusError:
+                pass  # Directory might already exist
+
+            try:
+                await client.create_symlink(name, runtime_dir, host_runtime_dir, uid=uid, gid=gid)
+            except IncusError:
+                pass  # Symlink might already exist from previous enter
+
+        except IncusError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+        finally:
+            await client.close()
+
+    # Run the async setup
+    asyncio.run(setup_and_enter())
+
+    # Build --env arguments from current environment
+    env_args: list[str] = []
+    for key, value in os.environ.items():
+        if key in _ENTER_ENV_SKIP:
+            continue
+        # Skip variables with problematic characters
+        if "\n" in value or "\x00" in value:
+            continue
+        env_args.extend(["--env", f"{key}={value}"])
+
+    # Build the command to run inside the container
+    if ctx.args:
+        # User provided a command to run
+        exec_cmd = ctx.args
+    else:
+        # No command - start interactive login shell
+        exec_cmd = ["login", "-p", "-f", username]
+
+    # Build full incus exec command
+    exec_args = [
+        "incus",
+        "exec",
+        name,
+        *env_args,
+        "--",
+        *exec_cmd,
+    ]
+
+    # Replace current process with incus exec for proper TTY handling
+    os.execvp("incus", exec_args)
 
 
 @app.command()

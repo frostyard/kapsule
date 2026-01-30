@@ -15,6 +15,7 @@ T = TypeVar("T", bound=BaseModel)
 
 from .models_generated import (
     Instance,
+    InstancePut,
     InstanceSource,
     InstancesPost,
     InstanceStatePut,
@@ -570,3 +571,83 @@ class IncusClient:
 
         if response.status_code >= 400:
             raise IncusError(f"Failed to create directory {path}: {response.text}", response.status_code)
+
+    # -------------------------------------------------------------------------
+    # Instance configuration
+    # -------------------------------------------------------------------------
+
+    async def patch_instance_config(
+        self,
+        name: str,
+        config: dict[str, str],
+    ) -> None:
+        """Patch instance configuration (merge with existing config).
+
+        Args:
+            name: Instance name.
+            config: Config keys to add/update.
+        """
+        # Get current instance to preserve all fields
+        instance = await self.get_instance(name)
+        current_config = instance.config or {}
+
+        # Merge new config into existing
+        merged_config = {**current_config, **config}
+
+        # Use PUT with merged config, preserving other fields
+        put_data = InstancePut(
+            architecture=instance.architecture,
+            config=merged_config,
+            description=instance.description,
+            devices=instance.devices,
+            ephemeral=instance.ephemeral,
+            profiles=instance.profiles,
+            restore=None,
+            stateful=instance.stateful,
+        )
+
+        await self._request(
+            "PUT",
+            f"/1.0/instances/{name}",
+            response_type=AsyncOperationResponse,
+            json=put_data.model_dump(exclude_none=True),
+        )
+
+    async def add_instance_device(
+        self,
+        name: str,
+        device_name: str,
+        device_config: dict[str, str],
+    ) -> None:
+        """Add a device to an instance.
+
+        Args:
+            name: Instance name.
+            device_name: Name for the device.
+            device_config: Device configuration (type, source, path, etc.).
+        """
+        # Get current instance to preserve all fields
+        instance = await self.get_instance(name)
+        current_devices = instance.devices or {}
+
+        # Add/update the device
+        merged_devices = {**current_devices, device_name: device_config}
+
+        # Use PUT with merged devices, preserving other fields
+        put_data = InstancePut(
+            architecture=instance.architecture,
+            config=instance.config,
+            description=instance.description,
+            devices=merged_devices,
+            ephemeral=instance.ephemeral,
+            profiles=instance.profiles,
+            restore=None,
+            stateful=instance.stateful,
+        )
+
+        await self._request(
+            "PUT",
+            f"/1.0/instances/{name}",
+            response_type=AsyncOperationResponse,
+            json=put_data.model_dump(exclude_none=True),
+        )
