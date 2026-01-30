@@ -64,6 +64,18 @@ class ContainerInfo(BaseModel):
     created: str
 
 
+# Module-level singleton instance
+_client: "IncusClient | None" = None
+
+
+def get_client() -> "IncusClient":
+    """Get the shared IncusClient instance."""
+    global _client
+    if _client is None:
+        _client = IncusClient()
+    return _client
+
+
 class IncusClient:
     """Async client for Incus REST API over Unix socket."""
 
