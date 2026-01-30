@@ -299,6 +299,12 @@ async def enter(
             if result.returncode != 0 and "already exists" not in result.stderr:
                 out.warning(f"useradd: {result.stderr.strip()}")
 
+            # Add sudoers entry for passwordless sudo
+            out.info(f"Configuring passwordless sudo for '{username}'")
+            sudoers_content = f"{username} ALL=(ALL) NOPASSWD:ALL\n"
+            sudoers_file = f"/etc/sudoers.d/{username}"
+            await client.push_file(name, sudoers_file, sudoers_content, uid=0, gid=0, mode="0440")
+
             # Mark user as mapped in container config
             await client.patch_instance_config(name, {user_mapped_key: "true"})
             out.success(f"User '{username}' configured")
