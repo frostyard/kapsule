@@ -318,7 +318,7 @@ async def list_containers(
 
 
 @app.command()
-def rm(
+async def rm(
     name: str = typer.Argument(..., help="Name of the container to remove"),
     force: bool = typer.Option(
         False,
@@ -328,31 +328,138 @@ def rm(
     ),
 ) -> None:
     """Remove a kapsule container."""
-    console.print(f"[bold red]Removing container:[/bold red] {name}")
-    if force:
-        console.print("  (forced)")
-    # TODO: Implement container removal via Incus REST API
-    console.print("[yellow]⚠ Stub implementation - not yet functional[/yellow]")
+    client = IncusClient()
+    try:
+        if not await client.is_available():
+            console.print("[red]Error:[/red] Incus is not available.")
+            console.print("[yellow]Hint:[/yellow] Run: [bold]sudo kapsule init[/bold]")
+            raise typer.Exit(1)
+
+        # Check if container exists
+        if not await client.instance_exists(name):
+            console.print(f"[red]Error:[/red] Container '{name}' does not exist.")
+            raise typer.Exit(1)
+
+        # Get container status
+        instance = await client.get_instance(name)
+        is_running = instance.status and instance.status.lower() == "running"
+
+        # If running and force not specified, error out
+        if is_running and not force:
+            console.print(
+                f"[red]Error:[/red] Container '{name}' is running. "
+                "Use --force to remove it anyway."
+            )
+            raise typer.Exit(1)
+
+        # If running and force specified, stop first
+        if is_running and force:
+            console.print(f"[bold yellow]Stopping container:[/bold yellow] {name}")
+            stop_op = await client.stop_instance(name, force=True, wait=True)
+            if not stop_op.succeeded:
+                console.print(f"  [red]✗[/red] Failed to stop: {stop_op.err or stop_op.status}")
+                raise typer.Exit(1)
+            console.print(f"  [green]✓[/green] Container stopped")
+
+        # Delete the container
+        console.print(f"[bold red]Removing container:[/bold red] {name}")
+        operation = await client.delete_instance(name, wait=True)
+
+        if not operation.succeeded:
+            console.print(f"  [red]✗[/red] Removal failed: {operation.err or operation.status}")
+            raise typer.Exit(1)
+
+        console.print(f"  [green]✓[/green] Container '{name}' removed successfully")
+
+    except IncusError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        await client.close()
 
 
 @app.command()
-def start(
+async def start(
     name: str = typer.Argument(..., help="Name of the container to start"),
 ) -> None:
     """Start a stopped kapsule container."""
-    console.print(f"[bold green]Starting container:[/bold green] {name}")
-    # TODO: Implement via Incus REST API
-    console.print("[yellow]⚠ Stub implementation - not yet functional[/yellow]")
+    client = IncusClient()
+    try:
+        if not await client.is_available():
+            console.print("[red]Error:[/red] Incus is not available.")
+            console.print("[yellow]Hint:[/yellow] Run: [bold]sudo kapsule init[/bold]")
+            raise typer.Exit(1)
+
+        # Check if container exists
+        if not await client.instance_exists(name):
+            console.print(f"[red]Error:[/red] Container '{name}' does not exist.")
+            raise typer.Exit(1)
+
+        # Check current status
+        instance = await client.get_instance(name)
+        if instance.status and instance.status.lower() == "running":
+            console.print(f"[yellow]Container '{name}' is already running.[/yellow]")
+            return
+
+        console.print(f"[bold green]Starting container:[/bold green] {name}")
+        operation = await client.start_instance(name, wait=True)
+
+        if not operation.succeeded:
+            console.print(f"  [red]✗[/red] Start failed: {operation.err or operation.status}")
+            raise typer.Exit(1)
+
+        console.print(f"  [green]✓[/green] Container '{name}' started successfully")
+
+    except IncusError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        await client.close()
 
 
 @app.command()
-def stop(
+async def stop(
     name: str = typer.Argument(..., help="Name of the container to stop"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force stop the container",
+    ),
 ) -> None:
     """Stop a running kapsule container."""
-    console.print(f"[bold yellow]Stopping container:[/bold yellow] {name}")
-    # TODO: Implement via Incus REST API
-    console.print("[yellow]⚠ Stub implementation - not yet functional[/yellow]")
+    client = IncusClient()
+    try:
+        if not await client.is_available():
+            console.print("[red]Error:[/red] Incus is not available.")
+            console.print("[yellow]Hint:[/yellow] Run: [bold]sudo kapsule init[/bold]")
+            raise typer.Exit(1)
+
+        # Check if container exists
+        if not await client.instance_exists(name):
+            console.print(f"[red]Error:[/red] Container '{name}' does not exist.")
+            raise typer.Exit(1)
+
+        # Check current status
+        instance = await client.get_instance(name)
+        if instance.status and instance.status.lower() != "running":
+            console.print(f"[yellow]Container '{name}' is not running.[/yellow]")
+            return
+
+        console.print(f"[bold yellow]Stopping container:[/bold yellow] {name}")
+        operation = await client.stop_instance(name, force=force, wait=True)
+
+        if not operation.succeeded:
+            console.print(f"  [red]✗[/red] Stop failed: {operation.err or operation.status}")
+            raise typer.Exit(1)
+
+        console.print(f"  [green]✓[/green] Container '{name}' stopped successfully")
+
+    except IncusError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        await client.close()
 
 
 def cli() -> None:

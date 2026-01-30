@@ -15,6 +15,7 @@ from .models_generated import (
     Instance,
     InstanceSource,
     InstancesPost,
+    InstanceStatePut,
     Profile,
     ProfilesPost,
 )
@@ -359,3 +360,106 @@ class IncusClient:
             return True
         except IncusError:
             return False
+
+    # -------------------------------------------------------------------------
+    # Instance state operations
+    # -------------------------------------------------------------------------
+
+    async def change_instance_state(
+        self, name: str, state: InstanceStatePut, wait: bool = False
+    ) -> OperationResult:
+        """Change instance state (start, stop, restart, freeze, unfreeze).
+
+        Args:
+            name: Instance name.
+            state: State change request.
+            wait: If True, wait for the operation to complete.
+
+        Returns:
+            OperationResult with status info.
+        """
+        response = await self.put(
+            f"/1.0/instances/{name}/state",
+            json=state.model_dump(exclude_none=True),
+        )
+
+        # For async operations, response contains the full response with operation URL
+        metadata = response.get("metadata", {})
+        operation = OperationResult(
+            id=metadata.get("id", ""),
+            status=metadata.get("status", "Unknown"),
+            err=metadata.get("err") or None,
+        )
+
+        if wait and operation.id:
+            operation = await self.wait_operation(operation.id)
+
+        return operation
+
+    async def start_instance(self, name: str, wait: bool = False) -> OperationResult:
+        """Start an instance.
+
+        Args:
+            name: Instance name.
+            wait: If True, wait for the operation to complete.
+
+        Returns:
+            OperationResult with status info.
+        """
+        state = InstanceStatePut(
+            action="start",
+            force=None,
+            stateful=None,
+            timeout=None,
+        )
+        return await self.change_instance_state(name, state, wait=wait)
+
+    async def stop_instance(
+        self, name: str, force: bool = False, wait: bool = False
+    ) -> OperationResult:
+        """Stop an instance.
+
+        Args:
+            name: Instance name.
+            force: If True, force stop the instance.
+            wait: If True, wait for the operation to complete.
+
+        Returns:
+            OperationResult with status info.
+        """
+        state = InstanceStatePut(
+            action="stop",
+            force=force,
+            stateful=None,
+            timeout=None,
+        )
+        return await self.change_instance_state(name, state, wait=wait)
+
+    # -------------------------------------------------------------------------
+    # Instance deletion
+    # -------------------------------------------------------------------------
+
+    async def delete_instance(self, name: str, wait: bool = False) -> OperationResult:
+        """Delete an instance.
+
+        Args:
+            name: Instance name.
+            wait: If True, wait for the operation to complete.
+
+        Returns:
+            OperationResult with status info.
+        """
+        response = await self.delete(f"/1.0/instances/{name}")
+
+        # For async operations, response contains the full response with operation URL
+        metadata = response.get("metadata", {})
+        operation = OperationResult(
+            id=metadata.get("id", ""),
+            status=metadata.get("status", "Unknown"),
+            err=metadata.get("err") or None,
+        )
+
+        if wait and operation.id:
+            operation = await self.wait_operation(operation.id)
+
+        return operation
