@@ -6,51 +6,34 @@ A distrobox-like tool using Incus as the container/VM backend, designed for KDE 
 
 ## Features
 
-- Create containers that can run Docker/Podman inside them (nested containerization)
-- Tight KDE/Plasma integration (widget, KIO worker, System Settings module)
-- Feature-based container configuration (graphics, audio, home mount, GPU)
-- D-Bus API for system integration
+- **Nested containerization** - Create containers that can run Docker/Podman inside them
+- **Host integration** - Containers share your home directory, user account, environment, Wayland/PipeWire sockets, and DBUS session.
+- **KDE/Plasma integration** - Widget, KIO worker, System Settings module (planned)
 
-## Building
-
-### Prerequisites
-
-**For Python CLI:**
-- Python >= 3.11
-- Meson >= 1.0.0
-- Ninja
-
-**For KDE Components (optional):**
-- Qt >= 6.6
-- KDE Frameworks >= 6.0
-- Extra CMake Modules (ECM)
-
-### Quick Start
+## Quick Start
 
 ```bash
-# Configure and build (Python CLI only)
-meson setup build
-meson compile -C build
+# Initialize Incus (first time only, requires root)
+sudo kapsule init
 
-# Install
-sudo meson install -C build
+# Create and enter a container
+kapsule create my-dev --image images:ubuntu/24.04
+kapsule enter my-dev
 
-# Or for development (editable install)
-pip install -e .
+# Inside the container, you have access to:
+# - Your home directory (mounted at /home/<username>)
+# - Your user account (same UID/GID)
+# - Your environment variables
+# - Docker/Podman capability
 ```
 
-### Building with KDE Components
+## Installation
+
+### For Development
 
 ```bash
-# Configure with KDE components
-meson setup build -Dkde_components=enabled
-meson compile -C build
-
-# Build KDE components with CMake
-cd kde
-cmake -B build -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build
-sudo cmake --install build
+# Install with pip (editable mode)
+pip install -e .
 ```
 
 ### Using kde-builder
@@ -61,8 +44,6 @@ Add to your `~/.config/kde-builder.yaml`:
 project kapsule:
   repository: kde:fernando/kapsule
   branch: main
-  override-build-system: meson
-  meson-options: -Dkde_components=true
 ```
 
 Then run:
@@ -71,48 +52,80 @@ Then run:
 kde-builder kapsule
 ```
 
-## Usage
+## Commands
 
-```bash
-# Create a container
-kapsule create my-dev --image ubuntu:24.04 --with-docker
+| Command | Description |
+|---------|-------------|
+| `kapsule init` | Initialize Incus (run once as root) |
+| `kapsule create <name>` | Create a new container |
+| `kapsule enter <name>` | Enter a container (interactive shell) |
+| `kapsule enter <name> -- <cmd>` | Run a command in a container |
+| `kapsule list` | List running containers |
+| `kapsule list --all` | List all containers |
+| `kapsule start <name>` | Start a stopped container |
+| `kapsule stop <name>` | Stop a running container |
+| `kapsule rm <name>` | Remove a container |
 
-# List containers
-kapsule list
-
-# Enter a container
-kapsule enter my-dev
-
-# Stop and remove
-kapsule stop my-dev
-kapsule rm my-dev
-```
-
-Or use the short alias:
+Use the short alias `kap` instead of `kapsule` for convenience:
 
 ```bash
 kap create my-dev
 kap enter my-dev
 ```
 
+## Container Images
+
+Kapsule uses Linux Containers images by default. Specify images with the `--image` flag:
+
+```bash
+# Ubuntu (default)
+kapsule create dev --image images:ubuntu/24.04
+
+# Fedora
+kapsule create fedora-dev --image images:fedora/41
+
+# Arch Linux
+kapsule create arch-dev --image images:archlinux
+```
+
+See available images at: https://images.linuxcontainers.org
+
+## How It Works
+
+Kapsule creates Incus containers with a special profile that enables:
+
+1. **Security nesting** - Allows running Docker/Podman inside the container
+2. **Host networking** - Container shares the host's network namespace
+3. **Device access** - GPU, audio, and display devices are available
+4. **Home mount** - Your home directory is bind-mounted into the container
+
+On first `enter`, Kapsule automatically:
+- Creates your user account in the container (matching host UID/GID)
+- Mounts your home directory
+- Sets up XDG_RUNTIME_DIR symlink for Wayland/PipeWire
+
 ## Project Structure
 
 ```
 kapsule/
-├── meson.build              # Top-level build (Python components)
 ├── pyproject.toml           # Python package definition
-├── src/kapsule/             # Python package
-│   ├── cli/                 # CLI commands
-│   ├── daemon/              # D-Bus service (TODO)
-│   └── incus/               # Incus REST client (TODO)
-├── kde/                     # KDE components (CMake)
-│   ├── CMakeLists.txt
-│   └── libkapsule-qt/       # Qt wrapper for D-Bus API
-└── data/                    # Config files (TODO)
-    ├── dbus/
-    ├── polkit/
-    └── systemd/
+├── src/
+│   ├── cli/                 # CLI application (kapsule command)
+│   │   ├── main.py          # Command definitions
+│   │   ├── incus_client.py  # Async Incus REST API client
+│   │   └── profile.py       # Kapsule container profile
+│   ├── daemon/              # D-Bus service for KDE integration
+│   └── libkapsule-qt/       # Qt/KDE wrapper library
+└── data/
+    ├── dbus/                # D-Bus service configuration
+    └── systemd/             # Systemd units and drop-ins
 ```
+
+## Requirements
+
+- Python >= 3.11
+- Incus
+- systemd
 
 ## License
 
