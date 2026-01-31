@@ -86,6 +86,7 @@ if(INSTALL_PYTHON_CLI)
     install(FILES
         src/daemon/__init__.py
         src/daemon/__main__.py
+        src/daemon/dbus_proxy.py
         src/daemon/service.py
         DESTINATION "${KAPSULE_PYTHON_DIR}/kapsule/daemon"
     )
