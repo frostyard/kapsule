@@ -350,13 +350,45 @@ async def enter(
     # Check if session mode is enabled for this container
     session_mode = instance_config.get(KAPSULE_SESSION_MODE_KEY) == "true"
 
-    # In non-session mode, symlink XDG_RUNTIME_DIR to host's runtime dir
-    # This allows apps to use the host's D-Bus session
-    if not session_mode:
-        runtime_dir = f"/run/user/{uid}"
-        host_runtime_dir = f"/.kapsule/host/run/user/{uid}"
+    runtime_dir = f"/run/user/{uid}"
+    host_runtime_dir = f"/.kapsule/host/run/user/{uid}"
+
+    if session_mode:
+        # Session mode: container has its own /run/user/$uid managed by systemd --user
+        # Symlink individual host sockets into it for graphics/audio access
+        # Sockets/paths to symlink from host runtime dir
+        # Format: (name_or_env_var, is_env_var)
+        runtime_links = [
+            # Wayland socket - get from WAYLAND_DISPLAY env var
+            ("WAYLAND_DISPLAY", True),
+            # X11 auth token
+            ("XAUTHORITY", True),
+            # PipeWire socket
+            ("pipewire-0", False),
+            # PulseAudio socket directory
+            ("pulse", False),
+        ]
+
+        for item, is_env in runtime_links:
+            if is_env:
+                # Get socket name from environment variable
+                socket_name = os.environ.get(item)
+                if not socket_name:
+                    continue
+            else:
+                socket_name = item
+
+            source = f"{host_runtime_dir}/{socket_name}"
+            target = f"{runtime_dir}/{socket_name}"
+
+            try:
+                await client.create_symlink(name, target, source, uid=uid, gid=gid)
+            except IncusError:
+                pass  # Symlink might already exist
+    else:
+        # Non-session mode: symlink entire runtime dir to host's
+        # This gives full access to host's D-Bus session and all sockets
         try:
-            # Ensure /run/user exists
             await client.mkdir(name, "/run/user", uid=0, gid=0, mode="0755")
         except IncusError:
             pass  # Directory might already exist
