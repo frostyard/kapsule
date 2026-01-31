@@ -20,10 +20,73 @@ from . import __version__
 from .async_typer import AsyncTyper
 from .config import KapsuleConfig, get_config_path, get_config_paths, load_config, save_config
 from .decorators import require_incus
-from .incus_client import IncusError, get_client
+from .incus_client import IncusClient, IncusError, get_client
 from .models_generated import InstanceSource, InstancesPost
 from .output import out
 from .profile import KAPSULE_BASE_PROFILE, KAPSULE_PROFILE_NAME
+
+
+# D-Bus socket path template using %t (systemd specifier for XDG_RUNTIME_DIR)
+# In container drop-in: /.kapsule/host%t/kapsule/{container}/dbus.socket
+# Which expands to: /.kapsule/host/run/user/{uid}/kapsule/{container}/dbus.socket
+# Host sees: /run/user/{uid}/kapsule/{container}/dbus.socket
+KAPSULE_DBUS_SOCKET_USER_PATH = "kapsule/{container}/dbus.socket"
+KAPSULE_DBUS_SOCKET_SYSTEMD = "/.kapsule/host%t/" + KAPSULE_DBUS_SOCKET_USER_PATH
+KAPSULE_DBUS_SOCKET_HOST = "/run/user/{uid}/" + KAPSULE_DBUS_SOCKET_USER_PATH
+
+
+async def _setup_container_dbus_socket(
+    client: IncusClient,
+    container_name: str,
+    uid: int,
+) -> None:
+    """Set up container's D-Bus session socket on a shared path.
+
+    Creates a systemd user drop-in for dbus.socket that redirects the
+    ListenStream to a path inside /.kapsule/host, making the container's
+    D-Bus session socket accessible from the host.
+
+    Args:
+        client: Incus client.
+        container_name: Name of the container.
+        uid: User ID for the socket path.
+    """
+    # Build the socket paths
+    # Use %t in systemd config (expands to XDG_RUNTIME_DIR inside container)
+    systemd_socket_path = KAPSULE_DBUS_SOCKET_SYSTEMD.format(container=container_name)
+    host_socket_path = KAPSULE_DBUS_SOCKET_HOST.format(uid=uid, container=container_name)
+
+    # Create the directory on host (will be visible in container via mount)
+    host_socket_dir = os.path.dirname(host_socket_path)
+    os.makedirs(host_socket_dir, exist_ok=True)
+
+    # Create systemd user drop-in directory
+    dropin_dir = "/etc/systemd/user/dbus.socket.d"
+    try:
+        await client.mkdir(container_name, dropin_dir, uid=0, gid=0, mode="0755")
+    except IncusError:
+        pass  # Directory might already exist
+
+    # Create the drop-in file
+    # Use %t so systemd expands it to the correct user's runtime dir
+    dropin_content = f"""[Socket]
+# Kapsule: redirect D-Bus session socket to shared path
+# This makes the container's D-Bus accessible from the host
+# %t expands to XDG_RUNTIME_DIR (/run/user/UID)
+ListenStream=
+ListenStream={systemd_socket_path}
+"""
+
+    dropin_file = f"{dropin_dir}/kapsule.conf"
+    out.info(f"Configuring container D-Bus socket at: {host_socket_path}")
+    await client.push_file(
+        container_name,
+        dropin_file,
+        dropin_content,
+        uid=0,
+        gid=0,
+        mode="0644",
+    )
 
 
 # Create the main Typer app
@@ -154,6 +217,19 @@ async def _create_container(name: str, image: str, *, session_mode: bool = False
         if operation.status != "Success":
             out.failure(f"Creation failed: {operation.err or operation.status}")
             raise typer.Exit(1)
+
+        # In session mode, add the D-Bus socket drop-in right after creation
+        # This only needs to happen once per container (not per-user)
+        if session_mode:
+            # Use uid 1000 as placeholder - the drop-in uses %t so it works for any user
+            await _setup_container_dbus_socket(client, name, uid=1000)
+
+            # Reload systemd to pick up the new drop-in
+            out.info("Reloading systemd user configuration...")
+            subprocess.run(
+                ["incus", "exec", name, "--", "systemctl", "--user", "--global", "daemon-reload"],
+                capture_output=True,
+            )
 
         out.success(f"Container '{name}' created successfully")
 
@@ -357,19 +433,21 @@ async def enter(
         # Session mode: container has its own /run/user/$uid managed by systemd --user
         # Symlink individual host sockets into it for graphics/audio access
         # Sockets/paths to symlink from host runtime dir
-        # Format: (name_or_env_var, is_env_var)
+        # Format: (name_or_env_var, is_env_var, subpath_override)
         runtime_links = [
             # Wayland socket - get from WAYLAND_DISPLAY env var
-            ("WAYLAND_DISPLAY", True),
+            ("WAYLAND_DISPLAY", True, None),
             # X11 auth token
-            ("XAUTHORITY", True),
+            ("XAUTHORITY", True, None),
             # PipeWire socket
-            ("pipewire-0", False),
+            ("pipewire-0", False, None),
             # PulseAudio socket directory
-            ("pulse", False),
+            ("pulse", False, None),
+            # DBus is set as a subdirectory under kapsule/{container}/dbus.socket
+            ("bus", False, KAPSULE_DBUS_SOCKET_USER_PATH.format(container=name)),
         ]
 
-        for item, is_env in runtime_links:
+        for item, is_env, subpath in runtime_links:
             if is_env:
                 # Get socket name from environment variable
                 socket_name = os.environ.get(item)
@@ -378,7 +456,7 @@ async def enter(
             else:
                 socket_name = item
 
-            source = f"{host_runtime_dir}/{socket_name}"
+            source = f"{host_runtime_dir}/{subpath if subpath else socket_name}"
             target = f"{runtime_dir}/{socket_name}"
 
             try:
