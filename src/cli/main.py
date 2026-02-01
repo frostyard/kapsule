@@ -201,6 +201,21 @@ async def init() -> None:
                 out.failure(f"Failed to reload systemd: {e.stderr.strip()}")
             raise typer.Exit(1)
 
+        # Reload D-Bus to pick up new policy files
+        out.info("Reloading D-Bus configuration...")
+        try:
+            subprocess.run(
+                ["systemctl", "reload", "dbus"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            with out.indent():
+                out.success("D-Bus configuration reloaded")
+        except subprocess.CalledProcessError as e:
+            with out.indent():
+                out.warning(f"Failed to reload D-Bus: {e.stderr.strip()}")
+
         # Load kernel modules
         out.info("Loading kernel modules for nested container support...")
         try:
