@@ -191,6 +191,39 @@ if(INSTALL_PYTHON_CLI AND VENDOR_PYTHON_DEPS)
 endif()
 
 # ============================================================================
+# D-Bus Introspection XML Generation
+# ============================================================================
+
+if(INSTALL_PYTHON_CLI)
+    # Generate D-Bus introspection XML from Python service at build time
+    set(DBUS_INTROSPECTION_XML "${CMAKE_CURRENT_BINARY_DIR}/org.kde.kapsule.xml")
+    
+    add_custom_command(
+        OUTPUT "${DBUS_INTROSPECTION_XML}"
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH="${CMAKE_CURRENT_SOURCE_DIR}/src"
+            ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_dbus_introspection.py"
+            --output "${DBUS_INTROSPECTION_XML}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_dbus_introspection.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/daemon/service.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/daemon/dbus_types.py"
+        COMMENT "Generating D-Bus introspection XML from Python service"
+        VERBATIM
+    )
+    
+    add_custom_target(generate_dbus_xml ALL
+        DEPENDS "${DBUS_INTROSPECTION_XML}"
+    )
+    
+    # Install the introspection XML for documentation/development purposes
+    install(FILES "${DBUS_INTROSPECTION_XML}"
+        DESTINATION "${CMAKE_INSTALL_PREFIX}/share/dbus-1/interfaces"
+    )
+endif()
+
+# ============================================================================
 # Systemd and D-Bus Service Files
 # ============================================================================
 
