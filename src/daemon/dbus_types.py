@@ -23,7 +23,7 @@ This gives you both:
 
 from __future__ import annotations
 
-from typing import Annotated, get_origin, get_args
+from typing import Annotated, Any, Callable, TypeVar, get_origin, get_args
 
 from dbus_fast.service import (
     dbus_property as _dbus_property,
@@ -31,6 +31,10 @@ from dbus_fast.service import (
     signal as _signal,
 )
 from dbus_fast.constants import PropertyAccess
+
+
+# Type variable for decorated functions
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 # =============================================================================
@@ -97,7 +101,7 @@ DBusStrDict = Annotated[dict[str, str], "a{ss}"]
 # Helper Functions
 # =============================================================================
 
-def extract_dbus_signature(annotation):
+def extract_dbus_signature(annotation: Any) -> str | Any:
     """Extract D-Bus signature string from an Annotated type.
 
     Args:
@@ -113,7 +117,7 @@ def extract_dbus_signature(annotation):
     return annotation
 
 
-def _convert_annotations(fn):
+def _convert_annotations(fn: F) -> F:
     """Convert all Annotated types in function annotations to D-Bus signatures.
 
     Modifies fn.__annotations__ in place to replace Annotated[T, "sig"] with "sig".
@@ -124,12 +128,14 @@ def _convert_annotations(fn):
     # Get type hints, evaluating any string annotations
     # We need to pass the function's globals so type aliases resolve correctly
     try:
-        hints = typing.get_type_hints(fn, globalns=fn.__globals__, include_extras=True)
+        hints = typing.get_type_hints(
+            fn, globalns=getattr(fn, "__globals__", None), include_extras=True
+        )
     except Exception:
         # Fall back to raw annotations if evaluation fails
-        hints = fn.__annotations__
+        hints = getattr(fn, "__annotations__", {})
 
-    new_annotations = {}
+    new_annotations: dict[str, Any] = {}
     for name, hint in hints.items():
         new_annotations[name] = extract_dbus_signature(hint)
     fn.__annotations__ = new_annotations
@@ -140,7 +146,7 @@ def _convert_annotations(fn):
 # Decorator Wrappers
 # =============================================================================
 
-def dbus_property(access=PropertyAccess.READ):
+def dbus_property(access: PropertyAccess = PropertyAccess.READ) -> Callable[[Callable[..., Any]], Any]:
     """Wrapper for dbus_fast.dbus_property that supports Annotated types.
 
     Usage:
@@ -148,13 +154,13 @@ def dbus_property(access=PropertyAccess.READ):
         def Version(self) -> DBusStr:
             return "1.0"
     """
-    def decorator(fn):
-        _convert_annotations(fn)
+    def decorator(fn: Callable[..., Any]) -> Any:
+        _convert_annotations(fn)  # type: ignore[arg-type]
         return _dbus_property(access=access)(fn)
     return decorator
 
 
-def method(name: str | None = None):
+def method(name: str | None = None) -> Callable[[F], F]:
     """Wrapper for dbus_fast.method that supports Annotated types.
 
     Usage:
@@ -162,13 +168,13 @@ def method(name: str | None = None):
         async def Echo(self, message: DBusStr) -> DBusStr:
             return message
     """
-    def decorator(fn):
+    def decorator(fn: F) -> F:
         _convert_annotations(fn)
-        return _method(name=name)(fn)
+        return _method(name=name)(fn)  # type: ignore[return-value]
     return decorator
 
 
-def signal():
+def signal() -> Callable[[F], F]:
     """Wrapper for dbus_fast.signal that supports Annotated types.
 
     Usage:
@@ -176,9 +182,9 @@ def signal():
         def StatusChanged(self, status: DBusStr, code: DBusInt32) -> "(si)":
             return (status, code)
     """
-    def decorator(fn):
+    def decorator(fn: F) -> F:
         _convert_annotations(fn)
-        return _signal()(fn)
+        return _signal()(fn)  # type: ignore[return-value]
     return decorator
 
 
