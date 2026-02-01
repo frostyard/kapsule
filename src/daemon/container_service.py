@@ -964,7 +964,9 @@ Requires=dbus.service
 
 [Service]
 Type=simple
+Environment=RUST_LOG=trace
 ExecStart={KAPSULE_DBUS_MUX_BIN} \\
+    --log-level debug \\
     --listen {mux_listen_socket} \\
     --container-bus unix:path={container_dbus_socket} \\
     --host-bus {host_dbus_socket}
