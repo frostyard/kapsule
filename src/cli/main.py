@@ -146,10 +146,6 @@ async def enter(
         kapsule enter mycontainer -- ls -la
         kapsule enter -- ls -la  # uses default container
     """
-    # Get user info
-    uid = os.getuid()
-    gid = os.getgid()
-
     # Handle the case where 'name' is actually the first word of the command
     # This happens because typer's '--' handling doesn't work well with optional args
     # When user types 'kapsule enter -- cmd', typer sees 'cmd' as the name argument
@@ -174,12 +170,10 @@ async def enter(
             container_name = None
 
     # Let daemon handle everything: config, container creation/start, user setup, symlinks
+    # The daemon obtains our credentials and environment from D-Bus and /proc
     success, error, exec_args = await daemon.prepare_enter(
-        uid=uid,
-        gid=gid,
         container_name=container_name,
         command=command,
-        env=dict(os.environ),
     )
 
     if not success:

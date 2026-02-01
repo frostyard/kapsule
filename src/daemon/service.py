@@ -6,6 +6,7 @@ Provides the org.kde.kapsule.Manager interface for container management.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import grp
 
 from dbus_fast.aio import MessageBus
@@ -18,6 +19,12 @@ from .container_service import ContainerService
 
 # Re-export IncusClient for use in __main__ and CLI
 from .incus_client import IncusClient
+
+# Context variable to store the current D-Bus message sender
+# This is set by a message handler before method dispatch
+_current_sender: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_sender", default=None
+)
 
 
 class KapsuleManagerInterface(ServiceInterface):
@@ -42,14 +49,14 @@ class KapsuleManagerInterface(ServiceInterface):
         """Set the message bus for credential lookups."""
         self._bus = bus
 
-    async def _get_caller_credentials(self, sender: str) -> tuple[int, int]:
-        """Get the UID and GID of a D-Bus caller.
+    async def _get_caller_credentials(self, sender: str) -> tuple[int, int, int]:
+        """Get the UID, GID, and PID of a D-Bus caller.
 
         Args:
             sender: The unique bus name of the caller (e.g., ":1.123")
 
         Returns:
-            Tuple of (uid, gid)
+            Tuple of (uid, gid, pid)
 
         Raises:
             RuntimeError: If credentials cannot be obtained
@@ -71,7 +78,7 @@ class KapsuleManagerInterface(ServiceInterface):
             raise RuntimeError(f"Failed to get UID: {reply.body[0] if reply.body else 'unknown error'}")
         uid = reply.body[0]
 
-        # Get PID to look up supplementary groups
+        # Get PID to look up GID and environment
         msg = Message(
             destination="org.freedesktop.DBus",
             path="/org/freedesktop/DBus",
@@ -98,7 +105,32 @@ class KapsuleManagerInterface(ServiceInterface):
         except (FileNotFoundError, PermissionError, ValueError):
             gid = uid  # Fallback
 
-        return uid, gid
+        return uid, gid, pid
+
+    def _get_process_environ(self, pid: int) -> dict[str, str]:
+        """Read environment variables from a process.
+
+        Args:
+            pid: Process ID to read environment from
+
+        Returns:
+            Dictionary of environment variables
+        """
+        env = {}
+        try:
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                data = f.read()
+                # environ is null-separated key=value pairs
+                for item in data.split(b"\x00"):
+                    if b"=" in item:
+                        key, _, value = item.partition(b"=")
+                        try:
+                            env[key.decode("utf-8")] = value.decode("utf-8")
+                        except UnicodeDecodeError:
+                            pass  # Skip non-UTF-8 entries
+        except (FileNotFoundError, PermissionError):
+            pass  # Return empty dict on error
+        return env
 
     # =========================================================================
     # Properties
@@ -368,7 +400,6 @@ class KapsuleManagerInterface(ServiceInterface):
         self,
         container_name: "s",
         command: "as",
-        env: "a{ss}",
     ) -> "(bsas)":
         """Prepare to enter a container.
 
@@ -378,54 +409,37 @@ class KapsuleManagerInterface(ServiceInterface):
         - Sets up the calling user if needed
         - Configures runtime directory symlinks
 
-        The caller's UID/GID is obtained from D-Bus connection credentials.
+        The caller's UID/GID and environment are obtained from D-Bus
+        connection credentials and /proc.
 
         Args:
             container_name: Container to enter (empty string for default)
             command: Command to run inside (empty array for shell)
-            env: Environment variables to pass through
 
         Returns:
             Tuple of (success, error_message, command_array)
             On success: (True, "", ["incus", "exec", ...])
             On failure: (False, "error message", [])
         """
-        # This method needs the sender, which dbus-fast injects
-        # We need to get it from the message context
-        # For now, we'll add a version that takes explicit UID/GID
-        # TODO: Figure out how to get sender in dbus-fast service methods
-        raise NotImplementedError("Use PrepareEnterWithCredentials instead")
+        # Get the sender from context (set by message handler)
+        sender = _current_sender.get()
+        if sender is None:
+            return (False, "Could not determine caller identity", [])
 
-    @method()
-    async def PrepareEnterWithCredentials(
-        self,
-        uid: "u",
-        gid: "u",
-        container_name: "s",
-        command: "as",
-        env: "a{ss}",
-    ) -> "(bsas)":
-        """Prepare to enter a container with explicit credentials.
+        try:
+            uid, gid, pid = await self._get_caller_credentials(sender)
+        except RuntimeError as e:
+            return (False, f"Failed to get caller credentials: {e}", [])
 
-        This is a temporary method until we figure out how to get
-        the D-Bus sender in dbus-fast service methods.
+        # Read environment from caller's process
+        env = self._get_process_environ(pid)
 
-        Args:
-            uid: Caller's user ID
-            gid: Caller's group ID
-            container_name: Container to enter (empty string for default)
-            command: Command to run inside (empty array for shell)
-            env: Environment variables to pass through
-
-        Returns:
-            Tuple of (success, error_message, command_array)
-        """
         success, message, cmd = await self._service.prepare_enter(
             uid=uid,
             gid=gid,
             container_name=container_name if container_name else None,
             command=list(command),
-            env=dict(env),
+            env=env,
         )
         return (success, message, cmd)
 
@@ -477,6 +491,15 @@ class KapsuleService:
 
         # Export the interface
         self._bus.export("/org/kde/kapsule", self._interface)
+
+        # Add message handler to capture sender for credential verification
+        def capture_sender(msg: Message) -> bool | None:
+            """Capture the sender of incoming method calls."""
+            if msg.message_type == MessageType.METHOD_CALL:
+                _current_sender.set(msg.sender)
+            return None  # Let normal processing continue
+
+        self._bus.add_message_handler(capture_sender)
 
         # Request the well-known name
         await self._bus.request_name("org.kde.kapsule")
