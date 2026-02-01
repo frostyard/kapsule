@@ -353,12 +353,11 @@ def dbus_type_to_qt_type(dbus_sig: str) -> str | None:
     return cpp_type
 
 
-def generate_introspection_xml(service_path: Path, qt_compat: bool = True) -> str:
-    """Generate D-Bus introspection XML.
+def generate_introspection_xml(service_path: Path) -> str:
+    """Generate D-Bus introspection XML for Qt.
     
     Args:
         service_path: Path to service.py
-        qt_compat: If True, omit standard D-Bus interfaces and add Qt annotations
     """
     methods, signals, properties = parse_service_interface(service_path)
     
@@ -375,46 +374,6 @@ def generate_introspection_xml(service_path: Path, qt_compat: bool = True) -> st
         '<node name="/org/kde/kapsule">',
     ]
     
-    # Only include standard D-Bus interfaces if not in Qt compat mode
-    if not qt_compat:
-        lines.extend([
-            '  <interface name="org.freedesktop.DBus.Introspectable">',
-            '    <method name="Introspect">',
-            '      <arg name="data" direction="out" type="s"/>',
-            '    </method>',
-            '  </interface>',
-            '',
-            '  <interface name="org.freedesktop.DBus.Peer">',
-            '    <method name="GetMachineId">',
-            '      <arg name="machine_uuid" direction="out" type="s"/>',
-            '    </method>',
-            '    <method name="Ping"/>',
-            '  </interface>',
-            '',
-            '  <interface name="org.freedesktop.DBus.Properties">',
-            '    <method name="Get">',
-            '      <arg name="interface_name" direction="in" type="s"/>',
-            '      <arg name="property_name" direction="in" type="s"/>',
-            '      <arg name="value" direction="out" type="v"/>',
-            '    </method>',
-            '    <method name="Set">',
-            '      <arg name="interface_name" direction="in" type="s"/>',
-            '      <arg name="property_name" direction="in" type="s"/>',
-            '      <arg name="value" direction="in" type="v"/>',
-            '    </method>',
-            '    <method name="GetAll">',
-            '      <arg name="interface_name" direction="in" type="s"/>',
-            '      <arg name="props" direction="out" type="a{sv}"/>',
-            '    </method>',
-            '    <signal name="PropertiesChanged">',
-            '      <arg name="interface_name" direction="out" type="s"/>',
-            '      <arg name="changed_properties" direction="out" type="a{sv}"/>',
-            '      <arg name="invalidated_properties" direction="out" type="as"/>',
-            '    </signal>',
-            '  </interface>',
-            '',
-        ])
-    
     # Our interface
     lines.append('  <interface name="org.kde.kapsule.Manager">')
     
@@ -425,18 +384,16 @@ def generate_introspection_xml(service_path: Path, qt_compat: bool = True) -> st
         # Input arguments with Qt annotations
         for idx, (arg_name, arg_type) in enumerate(method.args):
             lines.append(f'      <arg name="{arg_name}" direction="in" type="{arg_type}"/>')
-            if qt_compat:
-                qt_type = dbus_type_to_qt_type(arg_type)
-                if qt_type:
-                    lines.append(f'      <annotation name="org.qtproject.QtDBus.QtTypeName.In{idx}" value="{qt_type}"/>')
+            qt_type = dbus_type_to_qt_type(arg_type)
+            if qt_type:
+                lines.append(f'      <annotation name="org.qtproject.QtDBus.QtTypeName.In{idx}" value="{qt_type}"/>')
         
         # Return type with Qt annotation
         if method.return_type:
             lines.append(f'      <arg direction="out" type="{method.return_type}"/>')
-            if qt_compat:
-                qt_type = dbus_type_to_qt_type(method.return_type)
-                if qt_type:
-                    lines.append(f'      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="{qt_type}"/>')
+            qt_type = dbus_type_to_qt_type(method.return_type)
+            if qt_type:
+                lines.append(f'      <annotation name="org.qtproject.QtDBus.QtTypeName.Out0" value="{qt_type}"/>')
         
         lines.append('    </method>')
     
@@ -474,15 +431,10 @@ def main() -> int:
         default=Path(__file__).parent.parent / "src" / "daemon" / "service.py",
         help="Path to service.py file",
     )
-    parser.add_argument(
-        "--no-qt-compat",
-        action="store_true",
-        help="Include standard D-Bus interfaces (without Qt annotations)",
-    )
     args = parser.parse_args()
 
     try:
-        xml = generate_introspection_xml(args.service_path, qt_compat=not args.no_qt_compat)
+        xml = generate_introspection_xml(args.service_path)
     except Exception as e:
         print(f"Error generating introspection XML: {e}", file=sys.stderr)
         import traceback
