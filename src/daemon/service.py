@@ -6,10 +6,11 @@ Provides the org.kde.kapsule.Manager interface for container management.
 from __future__ import annotations
 
 import asyncio
+import grp
 
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method, dbus_property, signal
-from dbus_fast import BusType, Variant
+from dbus_fast import BusType, Variant, Message, MessageType
 from dbus_fast.constants import PropertyAccess
 
 from . import __version__
@@ -31,10 +32,73 @@ class KapsuleManagerInterface(ServiceInterface):
     Progress is reported via signals that clients can subscribe to.
     """
 
-    def __init__(self, container_service: ContainerService):
+    def __init__(self, container_service: ContainerService, bus: MessageBus | None = None):
         super().__init__("org.kde.kapsule.Manager")
         self._service = container_service
         self._version = __version__
+        self._bus = bus
+
+    def set_bus(self, bus: MessageBus) -> None:
+        """Set the message bus for credential lookups."""
+        self._bus = bus
+
+    async def _get_caller_credentials(self, sender: str) -> tuple[int, int]:
+        """Get the UID and GID of a D-Bus caller.
+
+        Args:
+            sender: The unique bus name of the caller (e.g., ":1.123")
+
+        Returns:
+            Tuple of (uid, gid)
+
+        Raises:
+            RuntimeError: If credentials cannot be obtained
+        """
+        if self._bus is None:
+            raise RuntimeError("Bus not set")
+
+        # Get UID
+        msg = Message(
+            destination="org.freedesktop.DBus",
+            path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus",
+            member="GetConnectionUnixUser",
+            signature="s",
+            body=[sender],
+        )
+        reply = await self._bus.call(msg)
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(f"Failed to get UID: {reply.body[0] if reply.body else 'unknown error'}")
+        uid = reply.body[0]
+
+        # Get PID to look up supplementary groups
+        msg = Message(
+            destination="org.freedesktop.DBus",
+            path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus",
+            member="GetConnectionUnixProcessID",
+            signature="s",
+            body=[sender],
+        )
+        reply = await self._bus.call(msg)
+        if reply.message_type == MessageType.ERROR:
+            raise RuntimeError(f"Failed to get PID: {reply.body[0] if reply.body else 'unknown error'}")
+        pid = reply.body[0]
+
+        # Read GID from /proc/<pid>/status
+        try:
+            with open(f"/proc/{pid}/status", "r") as f:
+                for line in f:
+                    if line.startswith("Gid:"):
+                        # Format: "Gid:\treal\teffective\tsaved\tfs"
+                        gid = int(line.split()[1])
+                        break
+                else:
+                    gid = uid  # Fallback to UID if GID not found
+        except (FileNotFoundError, PermissionError, ValueError):
+            gid = uid  # Fallback
+
+        return uid, gid
 
     # =========================================================================
     # Properties
@@ -295,6 +359,76 @@ class KapsuleManagerInterface(ServiceInterface):
         """
         return await self._service.get_container_info(name)
 
+    # =========================================================================
+    # Methods - Enter Container
+    # =========================================================================
+
+    @method()
+    async def PrepareEnter(
+        self,
+        container_name: "s",
+        command: "as",
+        env: "a{ss}",
+    ) -> "(bsas)":
+        """Prepare to enter a container.
+
+        This method handles all setup for entering a container:
+        - Creates the default container if needed
+        - Starts the container if stopped
+        - Sets up the calling user if needed
+        - Configures runtime directory symlinks
+
+        The caller's UID/GID is obtained from D-Bus connection credentials.
+
+        Args:
+            container_name: Container to enter (empty string for default)
+            command: Command to run inside (empty array for shell)
+            env: Environment variables to pass through
+
+        Returns:
+            Tuple of (success, error_message, command_array)
+            On success: (True, "", ["incus", "exec", ...])
+            On failure: (False, "error message", [])
+        """
+        # This method needs the sender, which dbus-fast injects
+        # We need to get it from the message context
+        # For now, we'll add a version that takes explicit UID/GID
+        # TODO: Figure out how to get sender in dbus-fast service methods
+        raise NotImplementedError("Use PrepareEnterWithCredentials instead")
+
+    @method()
+    async def PrepareEnterWithCredentials(
+        self,
+        uid: "u",
+        gid: "u",
+        container_name: "s",
+        command: "as",
+        env: "a{ss}",
+    ) -> "(bsas)":
+        """Prepare to enter a container with explicit credentials.
+
+        This is a temporary method until we figure out how to get
+        the D-Bus sender in dbus-fast service methods.
+
+        Args:
+            uid: Caller's user ID
+            gid: Caller's group ID
+            container_name: Container to enter (empty string for default)
+            command: Command to run inside (empty array for shell)
+            env: Environment variables to pass through
+
+        Returns:
+            Tuple of (success, error_message, command_array)
+        """
+        success, message, cmd = await self._service.prepare_enter(
+            uid=uid,
+            gid=gid,
+            container_name=container_name if container_name else None,
+            command=list(command),
+            env=dict(env),
+        )
+        return (success, message, cmd)
+
 
 class KapsuleService:
     """Main D-Bus service manager.
@@ -334,6 +468,7 @@ class KapsuleService:
         temp_interface = KapsuleManagerInterface.__new__(KapsuleManagerInterface)
         ServiceInterface.__init__(temp_interface, "org.kde.kapsule.Manager")
         temp_interface._version = __version__
+        temp_interface._bus = self._bus  # Set bus for credential lookups
 
         self._container_service = ContainerService(temp_interface, self._incus)
         temp_interface._service = self._container_service

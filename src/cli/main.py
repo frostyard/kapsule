@@ -18,26 +18,21 @@ from rich.table import Table
 
 from . import __version__
 from .async_typer import AsyncTyper
-from .config import KapsuleConfig, get_config_path, get_config_paths, load_config, save_config
 from .daemon_client import get_daemon_client, DaemonClient
 from .decorators import require_incus
 from .output import out
 
-# Import Incus client from daemon package
-# In dev: kapsule/cli/ and kapsule/daemon/ are siblings under src/
-# Installed: kapsule/ (cli) and kapsule/daemon/ are package root and subpackage
+# Import config from daemon package (still needed for create command default image)
 try:
-    from .daemon.incus_client import IncusClient, IncusError, get_client
+    from .daemon.config import load_config
 except ImportError:
-    from ..daemon.incus_client import IncusClient, IncusError, get_client
+    from ..daemon.config import load_config
 
-
-# D-Bus socket path template for enter command
-KAPSULE_DBUS_SOCKET_USER_PATH = "kapsule/{container}/dbus.socket"
-
-# Config keys for kapsule metadata stored in container config
-KAPSULE_SESSION_MODE_KEY = "user.kapsule.session-mode"
-KAPSULE_DBUS_MUX_KEY = "user.kapsule.dbus-mux"
+# Import Incus client from daemon package (still needed for init command)
+try:
+    from .daemon.incus_client import IncusError, get_client
+except ImportError:
+    from ..daemon.incus_client import IncusError, get_client
 
 
 # Create the main Typer app
@@ -130,20 +125,6 @@ async def create(
         raise typer.Exit(1)
 
 
-# Environment variables to skip when passing through to container
-_ENTER_ENV_SKIP = frozenset({
-    "_",              # Last command (set by shell)
-    "SHLVL",          # Shell nesting level
-    "OLDPWD",         # Previous directory
-    "PWD",            # Current directory (will be wrong in container)
-    "HOSTNAME",       # Host's hostname
-    "HOST",           # Host's hostname (zsh)
-    "LS_COLORS",      # Often huge and causes issues
-    "LESS_TERMCAP_mb", "LESS_TERMCAP_md", "LESS_TERMCAP_me",  # Less colors
-    "LESS_TERMCAP_se", "LESS_TERMCAP_so", "LESS_TERMCAP_ue", "LESS_TERMCAP_us",
-})
-
-
 @app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
 )
@@ -165,136 +146,48 @@ async def enter(
         kapsule enter mycontainer -- ls -la
         kapsule enter -- ls -la  # uses default container
     """
-    # Load config for defaults
-    config = load_config()
-
-    # Use default container name if not specified
-    if name is None:
-        name = config.default_container
-        out.info(f"Using default container: {name}")
-
     # Get user info
     uid = os.getuid()
     gid = os.getgid()
-    username = os.environ.get("USER") or os.environ.get("LOGNAME") or "root"
-    home_dir = os.environ.get("HOME") or f"/home/{username}"
 
+    # Handle the case where 'name' is actually the first word of the command
+    # This happens because typer's '--' handling doesn't work well with optional args
+    # When user types 'kapsule enter -- cmd', typer sees 'cmd' as the name argument
+    command = list(ctx.args)
+    container_name = name
+
+    # Connect to daemon
     daemon = get_daemon_client()
     await daemon.connect()
 
-    # Get container info from daemon
-    try:
-        info = await daemon.get_container_info(name)
-    except Exception:
-        # Container doesn't exist - create it if using default
-        if name == config.default_container:
-            out.warning(f"Default container '{name}' does not exist, creating it...")
-            success = await daemon.create_container(name, config.default_image)
-            if not success:
-                raise typer.Exit(1)
-            info = await daemon.get_container_info(name)
-        else:
-            out.error(f"Container '{name}' does not exist.")
-            raise typer.Exit(1)
+    # If a name was provided and there are extra args, check if 'name' is actually
+    # a container or a command. When user types 'kapsule enter -- cmd args',
+    # typer incorrectly parses 'cmd' as the container name.
+    if name is not None and command:
+        # Check if container exists
+        try:
+            await daemon.get_container_info(name)
+            # Container exists, 'name' is the container
+        except Exception:
+            # Container doesn't exist - treat 'name' as part of the command
+            command = [name] + command
+            container_name = None
 
-    status = info.get("status", "Unknown")
-    if status != "Running":
-        out.error(f"Container '{name}' is not running (status: {status}).")
-        out.hint(f"Start it with: kapsule start {name}")
+    # Let daemon handle everything: config, container creation/start, user setup, symlinks
+    success, error, exec_args = await daemon.prepare_enter(
+        uid=uid,
+        gid=gid,
+        container_name=container_name,
+        command=command,
+        env=dict(os.environ),
+    )
+
+    if not success:
+        out.error(error)
         raise typer.Exit(1)
 
-    # Check if user is already set up in this container
-    if not await daemon.is_user_setup(name, uid):
-        success = await daemon.setup_user(
-            container_name=name,
-            uid=uid,
-            gid=gid,
-            username=username,
-            home_dir=home_dir,
-        )
-        if not success:
-            raise typer.Exit(1)
-
-    # Handle runtime directory symlinks (needs to be done on host side)
-    # This part still uses direct Incus access for file operations
-    client = get_client()
-    instance = await client.get_instance(name)
-    instance_config = instance.config or {}
-
-    session_mode = instance_config.get(KAPSULE_SESSION_MODE_KEY) == "true"
-    dbus_mux_mode = instance_config.get(KAPSULE_DBUS_MUX_KEY) == "true"
-
-    runtime_dir = f"/run/user/{uid}"
-    host_runtime_dir = f"/.kapsule/host/run/user/{uid}"
-
-    if session_mode:
-        # Session mode: container has its own /run/user/$uid managed by systemd --user
-        # Symlink individual host sockets into it for graphics/audio access
-        runtime_links: list[tuple[str, bool, str | None]] = [
-            ("WAYLAND_DISPLAY", True, None),
-            ("XAUTHORITY", True, None),
-            ("pipewire-0", False, None),
-            ("pulse", False, None),
-        ]
-        if not dbus_mux_mode:
-            runtime_links.append(
-                ("bus", False, KAPSULE_DBUS_SOCKET_USER_PATH.format(container=name))
-            )
-
-        for item, is_env, subpath in runtime_links:
-            if is_env:
-                socket_name = os.environ.get(item)
-                if not socket_name:
-                    continue
-            else:
-                socket_name = item
-
-            source = f"{host_runtime_dir}/{subpath if subpath else socket_name}"
-            target = f"{runtime_dir}/{socket_name}"
-
-            try:
-                await client.create_symlink(name, target, source, uid=uid, gid=gid)
-            except IncusError:
-                pass  # Symlink might already exist
-    else:
-        # Non-session mode: symlink entire runtime dir to host's
-        try:
-            await client.mkdir(name, "/run/user", uid=0, gid=0, mode="0755")
-        except IncusError:
-            pass
-
-        try:
-            await client.create_symlink(name, runtime_dir, host_runtime_dir, uid=uid, gid=gid)
-        except IncusError:
-            pass
-
-    # Build --env arguments from current environment
-    env_args: list[str] = []
-    for key, value in os.environ.items():
-        if key in _ENTER_ENV_SKIP:
-            continue
-        if "\n" in value or "\x00" in value:
-            continue
-        env_args.extend(["--env", f"{key}={value}"])
-
-    # Build the command to run inside the container
-    if ctx.args:
-        exec_cmd = ["su", "-l", "-c", " ".join(ctx.args), username]
-    else:
-        exec_cmd = ["login", "-p", "-f", username]
-
-    # Build full incus exec command
-    exec_args = [
-        "incus",
-        "exec",
-        name,
-        *env_args,
-        "--",
-        *exec_cmd,
-    ]
-
     # Replace current process with incus exec for proper TTY handling
-    os.execvp("incus", exec_args)
+    os.execvp(exec_args[0], exec_args)
 
 
 @app.command()

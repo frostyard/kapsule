@@ -29,8 +29,11 @@ DEFAULT_CONTAINER_NAME = "kapsule"
 DEFAULT_IMAGE = "images:ubuntu/24.04"
 
 
-def get_config_paths() -> list[Path]:
+def get_config_paths(home_dir: str | None = None) -> list[Path]:
     """Get all config file paths in priority order (highest first).
+
+    Args:
+        home_dir: Home directory to use for user config. If None, uses current user's.
 
     Returns:
         List of paths to check, highest priority first.
@@ -38,10 +41,14 @@ def get_config_paths() -> list[Path]:
     paths: list[Path] = []
 
     # 1. User config (highest priority)
-    config_home = os.environ.get("XDG_CONFIG_HOME", "")
-    if not config_home:
-        config_home = os.path.expanduser("~/.config")
-    paths.append(Path(config_home) / "kapsule" / "kapsule.conf")
+    if home_dir:
+        # Use the provided home directory
+        paths.append(Path(home_dir) / ".config" / "kapsule" / "kapsule.conf")
+    else:
+        config_home = os.environ.get("XDG_CONFIG_HOME", "")
+        if not config_home:
+            config_home = os.path.expanduser("~/.config")
+        paths.append(Path(config_home) / "kapsule" / "kapsule.conf")
 
     # 2. System admin config
     paths.append(Path("/etc/kapsule/kapsule.conf"))
@@ -64,11 +71,14 @@ def get_config_path() -> Path:
     return Path(config_home) / "kapsule" / "kapsule.conf"
 
 
-def load_config() -> KapsuleConfig:
+def load_config(home_dir: str | None = None) -> KapsuleConfig:
     """Load configuration from all config paths, merging with precedence.
 
     Reads config files from lowest to highest priority, with higher
     priority values overriding lower ones.
+
+    Args:
+        home_dir: Home directory to use for user config. If None, uses current user's.
 
     Returns:
         KapsuleConfig with merged settings.
@@ -78,7 +88,7 @@ def load_config() -> KapsuleConfig:
     default_image = DEFAULT_IMAGE
 
     # Read in reverse priority order (lowest first, so higher overrides)
-    for config_path in reversed(get_config_paths()):
+    for config_path in reversed(get_config_paths(home_dir=home_dir)):
         if not config_path.exists():
             continue
 

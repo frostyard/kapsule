@@ -333,6 +333,34 @@ class DaemonClient:
         await self._ensure_connected()
         return await self._interface.call_is_user_setup(container_name, uid)
 
+    async def prepare_enter(
+        self,
+        uid: int,
+        gid: int,
+        container_name: str | None,
+        command: list[str],
+        env: dict[str, str],
+    ) -> tuple[bool, str, list[str]]:
+        """Prepare to enter a container.
+
+        The daemon handles all setup: container creation, user setup,
+        runtime symlinks, etc.
+
+        Args:
+            uid: Caller's user ID
+            gid: Caller's group ID
+            container_name: Container name (empty string for default)
+            command: Command to run (empty list for shell)
+            env: Environment variables to pass
+
+        Returns:
+            Tuple of (success, error_message, command_array)
+        """
+        await self._ensure_connected()
+        return await self._interface.call_prepare_enter_with_credentials(
+            uid, gid, container_name or "", command, env
+        )
+
     @property
     async def version(self) -> str:
         """Get daemon version."""

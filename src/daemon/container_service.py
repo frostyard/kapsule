@@ -7,9 +7,11 @@ using the operation decorator for automatic progress reporting.
 from __future__ import annotations
 
 import os
+import pwd
 import subprocess
 from typing import TYPE_CHECKING
 
+from .config import load_config
 from .operations import OperationError, OperationReporter, OperationTracker, operation
 
 if TYPE_CHECKING:
@@ -31,6 +33,19 @@ KAPSULE_DBUS_MUX_BIN = "/.kapsule/host/usr/lib/kapsule/kapsule-dbus-mux"
 # D-Bus socket path template using %t (systemd specifier for XDG_RUNTIME_DIR)
 KAPSULE_DBUS_SOCKET_USER_PATH = "kapsule/{container}/dbus.socket"
 KAPSULE_DBUS_SOCKET_SYSTEMD = "/.kapsule/host%t/" + KAPSULE_DBUS_SOCKET_USER_PATH
+
+# Environment variables to skip when passing through to container
+_ENTER_ENV_SKIP = frozenset({
+    "_",              # Last command (set by shell)
+    "SHLVL",          # Shell nesting level
+    "OLDPWD",         # Previous directory
+    "PWD",            # Current directory (will be wrong in container)
+    "HOSTNAME",       # Host's hostname
+    "HOST",           # Host's hostname (zsh)
+    "LS_COLORS",      # Often huge and causes issues
+    "LESS_TERMCAP_mb", "LESS_TERMCAP_md", "LESS_TERMCAP_me",  # Less colors
+    "LESS_TERMCAP_se", "LESS_TERMCAP_so", "LESS_TERMCAP_ue", "LESS_TERMCAP_us",
+})
 
 
 class ContainerService:
@@ -455,6 +470,324 @@ class ContainerService:
             return config.get(f"user.kapsule.host-users.{uid}.mapped") == "true"
         except IncusError:
             return False
+
+    async def prepare_enter(
+        self,
+        uid: int,
+        gid: int,
+        container_name: str | None,
+        command: list[str],
+        env: dict[str, str],
+    ) -> tuple[bool, str, list[str]]:
+        """Prepare everything needed to enter a container.
+
+        This method handles all the setup logic for entering a container:
+        - Resolves the container name from config if not specified
+        - Creates the default container if it doesn't exist
+        - Starts the container if needed
+        - Sets up the user if needed
+        - Configures runtime directory symlinks
+        - Builds the full command to execute
+
+        Args:
+            uid: Caller's user ID (from D-Bus credentials)
+            gid: Caller's group ID
+            container_name: Container to enter, or None for default
+            command: Command to run inside container (empty for shell)
+            env: Environment variables from the caller
+
+        Returns:
+            Tuple of (success, message, command_array)
+            On success: (True, "", ["incus", "exec", ...])
+            On failure: (False, "error message", [])
+        """
+        # Get user info from UID
+        try:
+            pw_entry = pwd.getpwuid(uid)
+            username = pw_entry.pw_name
+            home_dir = pw_entry.pw_dir
+        except KeyError:
+            return (False, f"User with UID {uid} not found", [])
+
+        # Load config for defaults (using caller's home for XDG paths)
+        config = load_config(home_dir=home_dir)
+
+        # Use default container name if not specified
+        if not container_name:
+            container_name = config.default_container
+
+        # Check if container exists
+        container_exists = await self._incus.instance_exists(container_name)
+
+        if not container_exists:
+            # Only auto-create if using default container
+            if container_name == config.default_container:
+                # Create the container (this is a synchronous operation here)
+                try:
+                    await self._create_default_container(
+                        container_name, config.default_image
+                    )
+                except OperationError as e:
+                    return (False, str(e), [])
+            else:
+                return (False, f"Container '{container_name}' does not exist", [])
+
+        # Check container status
+        instance = await self._incus.get_instance(container_name)
+        status = (instance.status or "unknown").lower()
+
+        if status != "running":
+            # Start the container
+            try:
+                op = await self._incus.start_instance(container_name, wait=True)
+                if op.status != "Success":
+                    return (False, f"Failed to start container: {op.err or op.status}", [])
+            except IncusError as e:
+                return (False, f"Failed to start container: {e}", [])
+
+        # Set up user if needed
+        if not await self.is_user_setup(container_name, uid):
+            try:
+                await self._setup_user_sync(container_name, uid, gid, username, home_dir)
+            except OperationError as e:
+                return (False, str(e), [])
+
+        # Set up runtime directory symlinks
+        try:
+            await self._setup_runtime_symlinks(container_name, uid, gid, env)
+        except OperationError as e:
+            return (False, str(e), [])
+
+        # Build environment arguments
+        env_args: list[str] = []
+        for key, value in env.items():
+            if key in _ENTER_ENV_SKIP:
+                continue
+            if "\n" in value or "\x00" in value:
+                continue
+            env_args.extend(["--env", f"{key}={value}"])
+
+        # Build the command to run inside the container
+        if command:
+            exec_cmd = ["su", "-l", "-c", " ".join(command), username]
+        else:
+            exec_cmd = ["login", "-p", "-f", username]
+
+        # Build full incus exec command
+        exec_args = [
+            "incus",
+            "exec",
+            container_name,
+            *env_args,
+            "--",
+            *exec_cmd,
+        ]
+
+        return (True, "", exec_args)
+
+    async def _create_default_container(self, name: str, image: str) -> None:
+        """Create the default container without progress reporting.
+
+        Args:
+            name: Container name
+            image: Image to use
+        """
+        # Ensure profile exists
+        try:
+            await self._incus.ensure_profile(KAPSULE_PROFILE_NAME, KAPSULE_BASE_PROFILE)
+        except IncusError as e:
+            raise OperationError(f"Failed to ensure profile: {e}")
+
+        # Parse image source
+        instance_source = self._parse_image_source(image)
+        if instance_source is None:
+            raise OperationError(f"Invalid image format: {image}")
+
+        # Create instance
+        instance_config = InstancesPost(
+            name=name,
+            profiles=[KAPSULE_PROFILE_NAME],
+            source=instance_source,
+            start=True,
+            architecture=None,
+            config=None,
+            description=None,
+            devices=None,
+            ephemeral=None,
+            instance_type=None,
+            restore=None,
+            stateful=None,
+            type=None,
+        )
+
+        try:
+            operation = await self._incus.create_instance(instance_config, wait=True)
+            if operation.status != "Success":
+                raise OperationError(f"Creation failed: {operation.err or operation.status}")
+        except IncusError as e:
+            raise OperationError(f"Failed to create container: {e}")
+
+    async def _setup_user_sync(
+        self,
+        container_name: str,
+        uid: int,
+        gid: int,
+        username: str,
+        home_dir: str,
+    ) -> None:
+        """Set up a host user in a container without progress reporting.
+
+        Args:
+            container_name: Container name
+            uid: User ID
+            gid: Group ID
+            username: Username
+            home_dir: Path to home directory on host
+        """
+        home_basename = os.path.basename(home_dir)
+        container_home = f"/home/{home_basename}"
+
+        # Mount home directory
+        device_name = f"kapsule-home-{username}"
+        try:
+            await self._incus.add_instance_device(
+                container_name,
+                device_name,
+                {
+                    "type": "disk",
+                    "source": home_dir,
+                    "path": container_home,
+                },
+            )
+        except IncusError as e:
+            raise OperationError(f"Failed to mount home directory: {e}")
+
+        # Create group
+        subprocess.run(
+            ["incus", "exec", container_name, "--", "groupadd", "-o", "-g", str(gid), username],
+            capture_output=True,
+        )
+
+        # Create user
+        subprocess.run(
+            [
+                "incus",
+                "exec",
+                container_name,
+                "--",
+                "useradd",
+                "-o",
+                "-M",
+                "-u",
+                str(uid),
+                "-g",
+                str(gid),
+                "-d",
+                container_home,
+                "-s",
+                "/bin/bash",
+                username,
+            ],
+            capture_output=True,
+        )
+
+        # Configure passwordless sudo
+        sudoers_content = f"{username} ALL=(ALL) NOPASSWD:ALL\n"
+        sudoers_file = f"/etc/sudoers.d/{username}"
+        try:
+            await self._incus.push_file(
+                container_name,
+                sudoers_file,
+                sudoers_content,
+                uid=0,
+                gid=0,
+                mode="0440",
+            )
+        except IncusError as e:
+            raise OperationError(f"Failed to configure sudo: {e}")
+
+        # Check if session mode is enabled and enable linger
+        instance = await self._incus.get_instance(container_name)
+        instance_config = instance.config or {}
+        session_mode = instance_config.get(KAPSULE_SESSION_MODE_KEY) == "true"
+
+        if session_mode:
+            subprocess.run(
+                ["incus", "exec", container_name, "--", "loginctl", "enable-linger", username],
+                capture_output=True,
+            )
+
+        # Mark user as mapped
+        user_mapped_key = f"user.kapsule.host-users.{uid}.mapped"
+        try:
+            await self._incus.patch_instance_config(container_name, {user_mapped_key: "true"})
+        except IncusError as e:
+            raise OperationError(f"Failed to update container config: {e}")
+
+    async def _setup_runtime_symlinks(
+        self,
+        container_name: str,
+        uid: int,
+        gid: int,
+        env: dict[str, str],
+    ) -> None:
+        """Set up runtime directory symlinks for graphics/audio access.
+
+        Args:
+            container_name: Container name
+            uid: User ID
+            gid: Group ID
+            env: Environment variables (for WAYLAND_DISPLAY etc)
+        """
+        instance = await self._incus.get_instance(container_name)
+        instance_config = instance.config or {}
+
+        session_mode = instance_config.get(KAPSULE_SESSION_MODE_KEY) == "true"
+        dbus_mux_mode = instance_config.get(KAPSULE_DBUS_MUX_KEY) == "true"
+
+        runtime_dir = f"/run/user/{uid}"
+        host_runtime_dir = f"/.kapsule/host/run/user/{uid}"
+
+        if session_mode:
+            # Session mode: container has its own /run/user/$uid managed by systemd --user
+            # Symlink individual host sockets into it for graphics/audio access
+            runtime_links: list[tuple[str, bool, str | None]] = [
+                ("WAYLAND_DISPLAY", True, None),
+                ("XAUTHORITY", True, None),
+                ("pipewire-0", False, None),
+                ("pulse", False, None),
+            ]
+            if not dbus_mux_mode:
+                runtime_links.append(
+                    ("bus", False, KAPSULE_DBUS_SOCKET_USER_PATH.format(container=container_name))
+                )
+
+            for item, is_env, subpath in runtime_links:
+                if is_env:
+                    socket_name = env.get(item)
+                    if not socket_name:
+                        continue
+                else:
+                    socket_name = item
+
+                source = f"{host_runtime_dir}/{subpath if subpath else socket_name}"
+                target = f"{runtime_dir}/{socket_name}"
+
+                try:
+                    await self._incus.create_symlink(container_name, target, source, uid=uid, gid=gid)
+                except IncusError:
+                    pass  # Symlink might already exist
+        else:
+            # Non-session mode: symlink entire runtime dir to host's
+            try:
+                await self._incus.mkdir(container_name, "/run/user", uid=0, gid=0, mode="0755")
+            except IncusError:
+                pass
+
+            try:
+                await self._incus.create_symlink(container_name, runtime_dir, host_runtime_dir, uid=uid, gid=gid)
+            except IncusError:
+                pass
 
     # -------------------------------------------------------------------------
     # Private Helper Methods

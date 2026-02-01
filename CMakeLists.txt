@@ -72,7 +72,6 @@ if(INSTALL_PYTHON_CLI)
     install(FILES
         src/cli/__init__.py
         src/cli/async_typer.py
-        src/cli/config.py
         src/cli/daemon_client.py
         src/cli/decorators.py
         src/cli/main.py
@@ -84,6 +83,7 @@ if(INSTALL_PYTHON_CLI)
     install(FILES
         src/daemon/__init__.py
         src/daemon/__main__.py
+        src/daemon/config.py
         src/daemon/container_service.py
         src/daemon/incus_client.py
         src/daemon/models_generated.py
