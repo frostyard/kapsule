@@ -15,18 +15,10 @@ from .operations import OperationError, OperationReporter, OperationTracker, ope
 if TYPE_CHECKING:
     from .service import KapsuleManagerInterface
 
-# Import Incus client and models from shared modules
-# In the source tree these are in ../cli/, but installed at the package root
-try:
-    # Development - relative import
-    from ..cli.incus_client import IncusClient, IncusError
-    from ..cli.models_generated import InstanceSource, InstancesPost
-    from ..cli.profile import KAPSULE_BASE_PROFILE, KAPSULE_PROFILE_NAME
-except ImportError:
-    # Installed - modules are at package root
-    from ..incus_client import IncusClient, IncusError
-    from ..models_generated import InstanceSource, InstancesPost
-    from ..profile import KAPSULE_BASE_PROFILE, KAPSULE_PROFILE_NAME
+# Import Incus client and models from local modules
+from .incus_client import IncusClient, IncusError
+from .models_generated import InstanceSource, InstancesPost
+from .profile import KAPSULE_BASE_PROFILE, KAPSULE_PROFILE_NAME
 
 
 # Config keys for kapsule metadata stored in container config

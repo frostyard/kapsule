@@ -15,11 +15,8 @@ from dbus_fast.constants import PropertyAccess
 from . import __version__
 from .container_service import ContainerService
 
-# Re-export IncusClient for use in __main__
-try:
-    from ..cli.incus_client import IncusClient
-except ImportError:
-    from ..incus_client import IncusClient
+# Re-export IncusClient for use in __main__ and CLI
+from .incus_client import IncusClient
 
 
 class KapsuleManagerInterface(ServiceInterface):

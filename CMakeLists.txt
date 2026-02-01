@@ -75,11 +75,8 @@ if(INSTALL_PYTHON_CLI)
         src/cli/config.py
         src/cli/daemon_client.py
         src/cli/decorators.py
-        src/cli/incus_client.py
         src/cli/main.py
-        src/cli/models_generated.py
         src/cli/output.py
-        src/cli/profile.py
         DESTINATION "${KAPSULE_PYTHON_DIR}/kapsule"
     )
 
@@ -88,7 +85,10 @@ if(INSTALL_PYTHON_CLI)
         src/daemon/__init__.py
         src/daemon/__main__.py
         src/daemon/container_service.py
+        src/daemon/incus_client.py
+        src/daemon/models_generated.py
         src/daemon/operations.py
+        src/daemon/profile.py
         src/daemon/service.py
         DESTINATION "${KAPSULE_PYTHON_DIR}/kapsule/daemon"
     )

@@ -5,7 +5,14 @@ from typing import Callable, Coroutine, TypeVar
 
 import typer
 
-from .incus_client import IncusError, get_client
+# Import Incus client from daemon package
+# In dev: kapsule/cli/ and kapsule/daemon/ are siblings under src/
+# Installed: kapsule/ (cli) and kapsule/daemon/ are package root and subpackage
+try:
+    from .daemon.incus_client import IncusError, get_client
+except ImportError:
+    from ..daemon.incus_client import IncusError, get_client
+
 from .output import out
 
 R = TypeVar("R")

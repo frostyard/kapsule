@@ -21,8 +21,15 @@ from .async_typer import AsyncTyper
 from .config import KapsuleConfig, get_config_path, get_config_paths, load_config, save_config
 from .daemon_client import get_daemon_client, DaemonClient
 from .decorators import require_incus
-from .incus_client import IncusClient, IncusError, get_client
 from .output import out
+
+# Import Incus client from daemon package
+# In dev: kapsule/cli/ and kapsule/daemon/ are siblings under src/
+# Installed: kapsule/ (cli) and kapsule/daemon/ are package root and subpackage
+try:
+    from .daemon.incus_client import IncusClient, IncusError, get_client
+except ImportError:
+    from ..daemon.incus_client import IncusClient, IncusError, get_client
 
 
 # D-Bus socket path template for enter command
