@@ -265,16 +265,30 @@ class KapsuleManagerInterface(ServiceInterface):
 
         Args:
             name: Container name
-            image: Image to use (e.g., "images:archlinux")
+            image: Image to use (e.g., "archlinux"), empty for default
             session_mode: Enable session mode with container D-Bus
             dbus_mux: Enable D-Bus multiplexer (implies session_mode)
 
         Returns:
             Operation ID for tracking progress
         """
+        # If no image specified, look up default from caller's config
+        actual_image = image
+        if not image:
+            sender = _current_sender.get()
+            if sender:
+                try:
+                    uid, gid, pid = await self._get_caller_credentials(sender)
+                    config = await self._service.get_config(uid)
+                    actual_image = config.get("default_image", "images:ubuntu/24.04")
+                except RuntimeError:
+                    actual_image = "images:ubuntu/24.04"
+            else:
+                actual_image = "images:ubuntu/24.04"
+
         return await self._service.create_container(
             name=name,
-            image=image,
+            image=actual_image,
             session_mode=session_mode,
             dbus_mux=dbus_mux,
         )
@@ -390,6 +404,28 @@ class KapsuleManagerInterface(ServiceInterface):
             Dictionary with container details
         """
         return await self._service.get_container_info(name)
+
+    @method()
+    async def GetConfig(self) -> "a{ss}":
+        """Get user configuration.
+
+        Reads configuration using the caller's home directory for
+        user-specific config paths.
+
+        Returns:
+            Dictionary with config keys and values
+        """
+        # Get the sender from context (set by message handler)
+        sender = _current_sender.get()
+        if sender is None:
+            return {"error": "Could not determine caller identity"}
+
+        try:
+            uid, gid, pid = await self._get_caller_credentials(sender)
+        except RuntimeError as e:
+            return {"error": f"Failed to get caller credentials: {e}"}
+
+        return await self._service.get_config(uid)
 
     # =========================================================================
     # Methods - Enter Container

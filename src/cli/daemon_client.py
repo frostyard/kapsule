@@ -356,6 +356,15 @@ class DaemonClient:
             container_name or "", command
         )
 
+    async def get_config(self) -> dict[str, str]:
+        """Get user configuration from daemon.
+
+        Returns:
+            Dictionary with config keys and values
+        """
+        await self._ensure_connected()
+        return await self._interface.call_get_config()
+
     @property
     async def version(self) -> str:
         """Get daemon version."""

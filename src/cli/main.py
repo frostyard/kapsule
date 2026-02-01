@@ -22,12 +22,6 @@ from .daemon_client import get_daemon_client, DaemonClient
 from .decorators import require_incus
 from .output import out
 
-# Import config from daemon package (still needed for create command default image)
-try:
-    from .daemon.config import load_config
-except ImportError:
-    from ..daemon.config import load_config
-
 # Import Incus client from daemon package (still needed for init command)
 try:
     from .daemon.incus_client import IncusError, get_client
@@ -108,15 +102,10 @@ async def create(
     applications to transparently access both host desktop services (notifications,
     file dialogs, etc.) and container-local services. Implies --session.
     """
-    # Use default image from config if not specified
-    if image is None:
-        config = load_config()
-        image = config.default_image
-
     daemon = get_daemon_client()
     success = await daemon.create_container(
         name=name,
-        image=image,
+        image=image or "",  # Empty string = daemon uses default from config
         session_mode=session,
         dbus_mux=dbus_mux,
     )
@@ -417,44 +406,39 @@ async def stop(
 
 
 @app.command(name="config")
-def config_cmd(
+@require_incus
+async def config_cmd(
     key: Optional[str] = typer.Argument(
-        None, help="Config key to get/set (default_container, default_image)"
+        None, help="Config key to display (default_container, default_image)"
     ),
-    value: Optional[str] = typer.Argument(None, help="Value to set (omit to get)"),
 ) -> None:
-    """View or modify kapsule configuration.
+    """View kapsule configuration.
 
     Configuration is read from (highest to lowest priority):
       1. ~/.config/kapsule/kapsule.conf  (user)
       2. /etc/kapsule/kapsule.conf       (system)
       3. /usr/lib/kapsule/kapsule.conf   (package defaults)
 
-    User config is written to ~/.config/kapsule/kapsule.conf
-
     Examples:
         kapsule config                    # Show all config
         kapsule config default_container  # Get default_container value
-        kapsule config default_container mybox  # Set default_container
-        kapsule config default_image images:fedora/40  # Set default_image
     """
-    config = load_config()
-    config_path = get_config_path()
+    daemon = get_daemon_client()
+    await daemon.connect()
+
+    config = await daemon.get_config()
+
+    if "error" in config:
+        out.error(config["error"])
+        raise typer.Exit(1)
 
     if key is None:
-        # Show all config paths
-        out.info("Config paths (highest priority first):")
-        for path in get_config_paths():
-            exists = "✓" if path.exists() else "✗"
-            out.info(f"  {exists} {path}")
-        out.info("")
-        out.info(f"User config (for writes): {config_path}")
-        out.info("")
+        # Show all config
         table = Table(show_header=True)
         table.add_column("Setting", style="cyan")
         table.add_column("Value", style="green")
-        table.add_row("default_container", config.default_container)
-        table.add_row("default_image", config.default_image)
+        table.add_row("default_container", config.get("default_container", ""))
+        table.add_row("default_image", config.get("default_image", ""))
         out.console.print(table)
         return
 
@@ -465,18 +449,7 @@ def config_cmd(
         out.hint(f"Valid keys: {', '.join(valid_keys)}")
         raise typer.Exit(1)
 
-    if value is None:
-        current_value = getattr(config, key)
-        out.info(f"{key} = {current_value}")
-    else:
-        new_config = KapsuleConfig(
-            default_container=(
-                value if key == "default_container" else config.default_container
-            ),
-            default_image=value if key == "default_image" else config.default_image,
-        )
-        save_config(new_config)
-        out.success(f"Set {key} = {value}")
+    out.info(f"{key} = {config.get(key, '')}")
 
 
 def cli() -> None:

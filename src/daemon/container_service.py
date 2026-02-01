@@ -471,6 +471,30 @@ class ContainerService:
         except IncusError:
             return False
 
+    async def get_config(self, uid: int) -> dict[str, str]:
+        """Get user configuration.
+
+        Args:
+            uid: User ID to load config for
+
+        Returns:
+            Dictionary with config keys and values
+        """
+        # Get user info from UID
+        try:
+            pw_entry = pwd.getpwuid(uid)
+            home_dir = pw_entry.pw_dir
+        except KeyError:
+            return {"error": f"User with UID {uid} not found"}
+
+        # Load config using caller's home for XDG paths
+        config = load_config(home_dir=home_dir)
+
+        return {
+            "default_container": config.default_container,
+            "default_image": config.default_image,
+        }
+
     async def prepare_enter(
         self,
         uid: int,
