@@ -1,17 +1,26 @@
 """Kapsule D-Bus daemon.
 
-Provides D-Bus proxy for container session buses with host service fallback.
+Provides container management services over D-Bus.
 """
 
 __version__ = "0.1.0"
 
-from .dbus_proxy import DBusProxy, NameLocation
-from .service import KapsuleService, ProxyManager
+from .service import KapsuleService, KapsuleManagerInterface
+from .container_service import ContainerService
+from .operations import (
+    MessageType,
+    OperationError,
+    OperationReporter,
+    operation,
+)
 
 __all__ = [
-    "DBusProxy",
+    "ContainerService",
+    "KapsuleManagerInterface",
     "KapsuleService",
-    "NameLocation",
-    "ProxyManager",
+    "MessageType",
+    "OperationError",
+    "OperationReporter",
     "__version__",
+    "operation",
 ]

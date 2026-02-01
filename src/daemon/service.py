@@ -1,6 +1,6 @@
 """D-Bus service implementation for Kapsule.
 
-Provides D-Bus proxy management for container session buses with host fallback.
+Provides the org.kde.kapsule.Manager interface for container management.
 """
 
 from __future__ import annotations
@@ -13,228 +13,337 @@ from dbus_fast import BusType, Variant
 from dbus_fast.constants import PropertyAccess
 
 from . import __version__
-from .dbus_proxy import DBusProxy
+from .container_service import ContainerService
+
+# Re-export IncusClient for use in __main__
+try:
+    from ..cli.incus_client import IncusClient
+except ImportError:
+    from ..incus_client import IncusClient
 
 
 class KapsuleManagerInterface(ServiceInterface):
     """org.kde.kapsule.Manager D-Bus interface.
 
-    Provides container D-Bus proxy management over D-Bus.
+    This interface provides:
+    - Container lifecycle management (create, delete, start, stop)
+    - User setup in containers
+    - Progress reporting via signals
+
+    All long-running operations return an operation ID immediately.
+    Progress is reported via signals that clients can subscribe to.
     """
 
-    def __init__(self, proxy_manager: ProxyManager):
+    def __init__(self, container_service: ContainerService):
         super().__init__("org.kde.kapsule.Manager")
-        self._proxy_manager = proxy_manager
+        self._service = container_service
         self._version = __version__
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # Properties
-    # -------------------------------------------------------------------------
+    # =========================================================================
 
     @dbus_property(access=PropertyAccess.READ)
     def Version(self) -> "s":
         """Daemon version."""
         return self._version
 
-    # -------------------------------------------------------------------------
-    # Methods
-    # -------------------------------------------------------------------------
-
-    @method()
-    async def StartProxy(self, container_name: "s", container_bus_address: "s") -> "b":
-        """Start a D-Bus proxy for a container.
-
-        Args:
-            container_name: Name of the container.
-            container_bus_address: D-Bus address for the container's session bus.
-
-        Returns:
-            True if proxy started successfully.
-        """
-        try:
-            await self._proxy_manager.start_proxy(container_name, container_bus_address)
-            return True
-        except Exception as e:
-            print(f"Failed to start proxy for {container_name}: {e}")
-            return False
-
-    @method()
-    async def StopProxy(self, container_name: "s") -> "b":
-        """Stop a D-Bus proxy for a container.
-
-        Args:
-            container_name: Name of the container.
-
-        Returns:
-            True if proxy stopped successfully.
-        """
-        try:
-            await self._proxy_manager.stop_proxy(container_name)
-            return True
-        except Exception as e:
-            print(f"Failed to stop proxy for {container_name}: {e}")
-            return False
-
-    @method()
-    async def ListProxies(self) -> "a(ssi)":
-        """List all running D-Bus proxies.
-
-        Returns:
-            Array of structs: (container_name, bus_address, name_count)
-        """
-        return self._proxy_manager.list_proxies()
-
-    @method()
-    async def GetProxyStats(self, container_name: "s") -> "a{sv}":
-        """Get statistics for a specific proxy.
-
-        Args:
-            container_name: Name of the container.
-
-        Returns:
-            Dictionary of stats (local_names, host_names, pending_calls, etc.)
-        """
-        stats = self._proxy_manager.get_proxy_stats(container_name)
-        return {k: Variant("i", v) for k, v in stats.items()}
-
-    # -------------------------------------------------------------------------
-    # Signals
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # Signals for Operation Progress
+    # =========================================================================
 
     @signal()
-    def ProxyStarted(self, container_name: str) -> "s":
-        """Emitted when a proxy starts."""
-        return container_name
-
-    @signal()
-    def ProxyStopped(self, container_name: str) -> "s":
-        """Emitted when a proxy stops."""
-        return container_name
-
-
-class ProxyManager:
-    """Manages D-Bus proxies for multiple containers."""
-
-    def __init__(self, host_bus_address: str | None = None):
-        """Initialize the proxy manager.
-
-        Args:
-            host_bus_address: D-Bus address for host session bus.
-                If None, uses DBUS_SESSION_BUS_ADDRESS.
-        """
-        self._host_bus_address = host_bus_address
-        self._proxies: dict[str, DBusProxy] = {}
-        self._proxy_tasks: dict[str, asyncio.Task] = {}
-
-    async def start_proxy(
+    def OperationStarted(
         self,
-        container_name: str,
-        container_bus_address: str,
-    ) -> None:
-        """Start a D-Bus proxy for a container.
+        operation_id: str,
+        operation_type: str,
+        description: str,
+        target: str,
+    ) -> "(ssss)":
+        """Emitted when an operation begins.
 
         Args:
-            container_name: Name of the container.
-            container_bus_address: D-Bus address for the container's session bus.
+            operation_id: Unique ID for tracking this operation
+            operation_type: Type of operation (create, delete, start, stop, setup_user)
+            description: Human-readable description (e.g., "Creating container: mybox")
+            target: Target of the operation (usually container name)
         """
-        if container_name in self._proxies:
-            raise ValueError(f"Proxy already running for {container_name}")
+        return (operation_id, operation_type, description, target)
 
-        proxy = DBusProxy(
-            container_bus_address=container_bus_address,
-            host_bus_address=self._host_bus_address,
-        )
-        await proxy.start()
-
-        self._proxies[container_name] = proxy
-        self._proxy_tasks[container_name] = asyncio.create_task(
-            proxy.run(),
-            name=f"proxy-{container_name}",
-        )
-
-    async def stop_proxy(self, container_name: str) -> None:
-        """Stop a D-Bus proxy.
+    @signal()
+    def OperationMessage(
+        self,
+        operation_id: str,
+        message_type: int,
+        message: str,
+        indent_level: int,
+    ) -> "(sisi)":
+        """Emitted for progress messages within an operation.
 
         Args:
-            container_name: Name of the container.
+            operation_id: Operation this message belongs to
+            message_type: Type of message (0=info, 1=success, 2=warning, 3=error, 4=dim, 5=hint)
+            message: The message text
+            indent_level: Indentation level for hierarchical display
         """
-        if container_name not in self._proxies:
-            return
+        return (operation_id, message_type, message, indent_level)
 
-        proxy = self._proxies.pop(container_name)
-        task = self._proxy_tasks.pop(container_name, None)
+    @signal()
+    def OperationCompleted(
+        self,
+        operation_id: str,
+        success: bool,
+        message: str,
+    ) -> "(sbs)":
+        """Emitted when an operation finishes.
 
-        await proxy.stop()
+        Args:
+            operation_id: Operation that completed
+            success: Whether the operation succeeded
+            message: Final message (error message if failed)
+        """
+        return (operation_id, success, message)
 
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    @signal()
+    def ProgressStarted(
+        self,
+        operation_id: str,
+        progress_id: str,
+        description: str,
+        total: int,
+        indent_level: int,
+    ) -> "(sssii)":
+        """Emitted when a progress bar starts.
 
-    async def stop_all(self) -> None:
-        """Stop all running proxies."""
-        names = list(self._proxies.keys())
-        for name in names:
-            await self.stop_proxy(name)
+        Args:
+            operation_id: Parent operation
+            progress_id: Unique ID for this progress bar
+            description: What's being tracked (e.g., "Downloading image...")
+            total: Total units (-1 for indeterminate)
+            indent_level: Indentation level
+        """
+        return (operation_id, progress_id, description, total, indent_level)
 
-    def list_proxies(self) -> list[tuple[str, str, int]]:
-        """List all running proxies.
+    @signal()
+    def ProgressUpdate(
+        self,
+        progress_id: str,
+        current: int,
+        rate: float,
+    ) -> "(sid)":
+        """Emitted to update a progress bar.
+
+        Args:
+            progress_id: Progress bar to update
+            current: Current progress value
+            rate: Rate of progress (for ETA calculation)
+        """
+        return (progress_id, current, rate)
+
+    @signal()
+    def ProgressCompleted(
+        self,
+        progress_id: str,
+        success: bool,
+        message: str,
+    ) -> "(sbs)":
+        """Emitted when a progress bar completes.
+
+        Args:
+            progress_id: Progress bar that completed
+            success: Whether it succeeded
+            message: Optional completion message (replaces bar)
+        """
+        return (progress_id, success, message)
+
+    # =========================================================================
+    # Methods - Container Lifecycle
+    # =========================================================================
+
+    @method()
+    async def CreateContainer(
+        self,
+        name: "s",
+        image: "s",
+        session_mode: "b",
+        dbus_mux: "b",
+    ) -> "s":
+        """Create a new container.
+
+        Args:
+            name: Container name
+            image: Image to use (e.g., "images:archlinux")
+            session_mode: Enable session mode with container D-Bus
+            dbus_mux: Enable D-Bus multiplexer (implies session_mode)
 
         Returns:
-            List of (container_name, bus_address, name_count) tuples.
+            Operation ID for tracking progress
         """
-        result = []
-        for name, proxy in self._proxies.items():
-            stats = proxy.get_stats()
-            result.append((
-                name,
-                proxy._container_addr,
-                stats["local_names"] + stats["host_names"],
-            ))
-        return result
+        return await self._service.create_container(
+            name=name,
+            image=image,
+            session_mode=session_mode,
+            dbus_mux=dbus_mux,
+        )
 
-    def get_proxy_stats(self, container_name: str) -> dict[str, int]:
-        """Get statistics for a proxy.
+    @method()
+    async def DeleteContainer(self, name: "s", force: "b") -> "s":
+        """Delete a container.
 
         Args:
-            container_name: Name of the container.
+            name: Container name
+            force: Force removal even if running
 
         Returns:
-            Statistics dictionary.
+            Operation ID for tracking progress
         """
-        if container_name not in self._proxies:
-            return {}
-        return self._proxies[container_name].get_stats()
+        return await self._service.delete_container(name=name, force=force)
+
+    @method()
+    async def StartContainer(self, name: "s") -> "s":
+        """Start a stopped container.
+
+        Args:
+            name: Container name
+
+        Returns:
+            Operation ID for tracking progress
+        """
+        return await self._service.start_container(name=name)
+
+    @method()
+    async def StopContainer(self, name: "s", force: "b") -> "s":
+        """Stop a running container.
+
+        Args:
+            name: Container name
+            force: Force stop
+
+        Returns:
+            Operation ID for tracking progress
+        """
+        return await self._service.stop_container(name=name, force=force)
+
+    # =========================================================================
+    # Methods - User Setup
+    # =========================================================================
+
+    @method()
+    async def SetupUser(
+        self,
+        container_name: "s",
+        uid: "u",
+        gid: "u",
+        username: "s",
+        home_dir: "s",
+    ) -> "s":
+        """Set up a host user in a container.
+
+        This mounts the user's home directory and creates a matching
+        user account with passwordless sudo.
+
+        Args:
+            container_name: Container name
+            uid: User ID
+            gid: Group ID
+            username: Username
+            home_dir: Path to home directory on host
+
+        Returns:
+            Operation ID for tracking progress
+        """
+        return await self._service.setup_user(
+            container_name=container_name,
+            uid=uid,
+            gid=gid,
+            username=username,
+            home_dir=home_dir,
+        )
+
+    @method()
+    async def IsUserSetup(self, container_name: "s", uid: "u") -> "b":
+        """Check if a user is set up in a container.
+
+        Args:
+            container_name: Container name
+            uid: User ID to check
+
+        Returns:
+            True if user is set up
+        """
+        return await self._service.is_user_setup(container_name, uid)
+
+    # =========================================================================
+    # Methods - Query
+    # =========================================================================
+
+    @method()
+    async def ListContainers(self) -> "a(sssss)":
+        """List all containers.
+
+        Returns:
+            Array of (name, status, image, created, mode) tuples
+        """
+        return await self._service.list_containers()
+
+    @method()
+    async def GetContainerInfo(self, name: "s") -> "a{ss}":
+        """Get detailed information about a container.
+
+        Args:
+            name: Container name
+
+        Returns:
+            Dictionary with container details
+        """
+        return await self._service.get_container_info(name)
 
 
 class KapsuleService:
-    """Main D-Bus service manager."""
+    """Main D-Bus service manager.
+
+    Handles D-Bus connection lifecycle and hosts the KapsuleManagerInterface.
+    """
 
     def __init__(
         self,
-        bus_type: str = "session",
-        host_bus_address: str | None = None,
+        bus_type: str = "system",
+        socket_path: str = "/var/lib/incus/unix.socket",
     ):
         """Initialize the service.
 
         Args:
-            bus_type: "session" or "system" bus for the daemon's own interface.
-            host_bus_address: D-Bus address for host session bus (for proxying).
+            bus_type: "session" or "system" bus for the daemon's interface
+            socket_path: Path to Incus Unix socket
         """
         self._bus_type = BusType.SYSTEM if bus_type == "system" else BusType.SESSION
+        self._socket_path = socket_path
         self._bus: MessageBus | None = None
-        self._proxy_manager = ProxyManager(host_bus_address)
         self._interface: KapsuleManagerInterface | None = None
+        self._incus: IncusClient | None = None
+        self._container_service: ContainerService | None = None
 
     async def start(self) -> None:
         """Start the D-Bus service."""
+        # Connect to D-Bus
         self._bus = await MessageBus(bus_type=self._bus_type).connect()
 
-        self._interface = KapsuleManagerInterface(self._proxy_manager)
+        # Create Incus client
+        self._incus = IncusClient(socket_path=self._socket_path)
 
-        # Export the interface at /org/kde/kapsule
+        # Create the interface and container service
+        # The interface needs the service, and the service needs the interface
+        # So we create them in two steps using __new__
+        temp_interface = KapsuleManagerInterface.__new__(KapsuleManagerInterface)
+        ServiceInterface.__init__(temp_interface, "org.kde.kapsule.Manager")
+        temp_interface._version = __version__
+
+        self._container_service = ContainerService(temp_interface, self._incus)
+        temp_interface._service = self._container_service
+
+        self._interface = temp_interface
+
+        # Export the interface
         self._bus.export("/org/kde/kapsule", self._interface)
 
         # Request the well-known name
@@ -253,12 +362,15 @@ class KapsuleService:
 
     async def stop(self) -> None:
         """Stop the D-Bus service."""
-        await self._proxy_manager.stop_all()
+        if self._incus:
+            await self._incus.close()
+            self._incus = None
+
         if self._bus:
             self._bus.disconnect()
             self._bus = None
 
     @property
-    def proxy_manager(self) -> ProxyManager:
-        """Get the proxy manager."""
-        return self._proxy_manager
+    def container_service(self) -> ContainerService | None:
+        """Get the container service."""
+        return self._container_service
