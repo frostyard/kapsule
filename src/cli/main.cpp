@@ -12,7 +12,9 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 
 #include <qcoro/qcorotask.h>
 #include <qcoro/qcorocore.h>
@@ -36,6 +38,7 @@ QCoro::Task<int> cmdStart(KapsuleClient &client, const QStringList &args);
 QCoro::Task<int> cmdStop(KapsuleClient &client, const QStringList &args);
 QCoro::Task<int> cmdRm(KapsuleClient &client, const QStringList &args);
 QCoro::Task<int> cmdConfig(KapsuleClient &client, const QStringList &args);
+int cmdInit(const QStringList &args);
 
 void printUsage()
 {
@@ -45,8 +48,9 @@ void printUsage()
     o.section("Commands:");
     {
         IndentGuard g(o);
+        o.info("init             Initialize kapsule (requires root)");
         o.info("create <name>    Create a new container");
-        o.info("enter [name]     Enter a container (default if configured)");
+        o.info("enter [name]     Enter a container (default if configured)");;
         o.info("list             List containers");
         o.info("start <name>     Start a stopped container");
         o.info("stop <name>      Stop a running container");
@@ -77,6 +81,11 @@ QCoro::Task<int> asyncMain(const QStringList &args)
     if (command == QStringLiteral("--version") || command == QStringLiteral("-V")) {
         o.info(QStringLiteral("%1 version %2").arg(programName, QCoreApplication::applicationVersion()).toStdString());
         co_return 0;
+    }
+
+    // Handle init command before daemon connection (it doesn't need the daemon)
+    if (command == QStringLiteral("init")) {
+        co_return cmdInit(args.mid(2));
     }
 
     // Create client and check connection
@@ -562,6 +571,50 @@ QCoro::Task<int> cmdConfig(KapsuleClient &client, const QStringList &args)
     }
 
     co_return 0;
+}
+
+// =============================================================================
+// Command: init
+// =============================================================================
+
+int cmdInit(const QStringList &args)
+{
+    auto &o = out();
+
+    // Handle --help
+    if (args.contains(QStringLiteral("--help")) || args.contains(QStringLiteral("-h"))) {
+        std::cout << "Usage: " << programName.toStdString() << " init\n\n"
+                  << "Initialize kapsule by enabling and starting Incus sockets.\n\n"
+                  << "This command must be run as root (e.g., sudo " << programName.toStdString() << " init).\n"
+                  << "It performs the following:\n"
+                  << "  - Reloads systemd daemon\n"
+                  << "  - Reloads D-Bus configuration\n"
+                  << "  - Loads kernel modules for nested container support\n"
+                  << "  - Enables and starts Incus sockets\n"
+                  << "  - Initializes Incus with default storage pool\n";
+        return 0;
+    }
+
+    // Check if running as root
+    if (geteuid() != 0) {
+        o.error("This command must be run as root");
+        o.hint(QStringLiteral("Run: sudo %1 init").arg(programName).toStdString());
+        return 1;
+    }
+
+    // Use the compile-time defined path to the init script
+    QString initScript = QStringLiteral(KAPSULE_INIT_SCRIPT_PATH);
+
+    if (!QFile::exists(initScript)) {
+        o.error("Cannot find kapsule-init.sh script");
+        o.hint(QStringLiteral("Expected at: %1").arg(initScript).toStdString());
+        return 1;
+    }
+
+    // Execute the init script
+    int result = QProcess::execute(QStringLiteral("/bin/bash"), {initScript});
+
+    return result;
 }
 
 // =============================================================================

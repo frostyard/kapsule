@@ -13,6 +13,12 @@ target_include_directories(kapsule
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Define the install path for the init script
+target_compile_definitions(kapsule
+    PRIVATE
+        KAPSULE_INIT_SCRIPT_PATH="${CMAKE_INSTALL_PREFIX}/lib/kapsule/kapsule-init.sh"
+)
+
 target_link_libraries(kapsule
     PRIVATE
         Kapsule::KapsuleQt
