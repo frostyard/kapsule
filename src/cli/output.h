@@ -6,25 +6,13 @@
 #ifndef KAPSULE_CLI_OUTPUT_H
 #define KAPSULE_CLI_OUTPUT_H
 
+#include <Kapsule/Types>
+
 #include <iostream>
 #include <string>
 #include <string_view>
 
 namespace Kapsule {
-
-/**
- * @brief Message types for daemon operation output.
- *
- * These match the Python MessageType enum used by the daemon.
- */
-enum class MessageType {
-    Info = 0,
-    Success = 1,
-    Warning = 2,
-    Error = 3,
-    Dim = 4,
-    Hint = 5
-};
 
 /**
  * @brief Console output helpers with scoped indentation.

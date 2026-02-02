@@ -133,7 +133,7 @@ QCoro::Task<int> cmdCreate(KapsuleClient &client, const QStringList &args)
     });
 
     // Parse with "kapsule create" as program name for help text
-    QStringList fullArgs = {QStringLiteral("kapsule create")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule create")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;
@@ -195,7 +195,7 @@ QCoro::Task<int> cmdEnter(KapsuleClient &client, const QStringList &args)
     parser.addPositionalArgument(QStringLiteral("name"), QStringLiteral("Container name (optional, uses default)"));
     parser.addPositionalArgument(QStringLiteral("command"), QStringLiteral("Command to run (optional)"));
 
-    QStringList fullArgs = {QStringLiteral("kapsule enter")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule enter")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;
@@ -267,7 +267,7 @@ QCoro::Task<int> cmdList(KapsuleClient &client, const QStringList &args)
          QStringLiteral("Show all containers including stopped")},
     });
 
-    QStringList fullArgs = {QStringLiteral("kapsule list")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule list")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;
@@ -359,7 +359,7 @@ QCoro::Task<int> cmdStart(KapsuleClient &client, const QStringList &args)
     parser.addHelpOption();
     parser.addPositionalArgument(QStringLiteral("name"), QStringLiteral("Container name"));
 
-    QStringList fullArgs = {QStringLiteral("kapsule start")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule start")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;
@@ -411,7 +411,7 @@ QCoro::Task<int> cmdStop(KapsuleClient &client, const QStringList &args)
          QStringLiteral("Force stop the container")},
     });
 
-    QStringList fullArgs = {QStringLiteral("kapsule stop")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule stop")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;
@@ -464,7 +464,7 @@ QCoro::Task<int> cmdRm(KapsuleClient &client, const QStringList &args)
          QStringLiteral("Force removal even if running")},
     });
 
-    QStringList fullArgs = {QStringLiteral("kapsule rm")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule rm")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;
@@ -513,7 +513,7 @@ QCoro::Task<int> cmdConfig(KapsuleClient &client, const QStringList &args)
     parser.addHelpOption();
     parser.addPositionalArgument(QStringLiteral("key"), QStringLiteral("Config key to display (optional)"));
 
-    QStringList fullArgs = {QStringLiteral("kapsule config")} + args;
+    QStringList fullArgs = QStringList{QStringLiteral("kapsule config")} + args;
     if (!parser.parse(fullArgs)) {
         o.error(parser.errorText().toStdString());
         co_return 1;

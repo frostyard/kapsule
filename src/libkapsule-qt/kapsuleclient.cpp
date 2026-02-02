@@ -10,7 +10,7 @@
 #include <QDBusConnection>
 #include <QDBusPendingReply>
 
-#include <qcoro/qcorodbuspendingcall.h>
+#include <qcoro/qcorodbuspendingreply.h>
 #include <qcoro/qcorotimer.h>
 
 namespace Kapsule {
@@ -185,11 +185,11 @@ QCoro::Task<Container> KapsuleClient::container(const QString &name)
 
     const auto &info = reply.value();
     co_return Container::fromData(
-        info.value(QStringLiteral("name")),
-        info.value(QStringLiteral("status")),
-        info.value(QStringLiteral("image")),
-        info.value(QStringLiteral("created")),
-        info.value(QStringLiteral("mode"))
+        info.value(QStringLiteral("name")).toString(),
+        info.value(QStringLiteral("status")).toString(),
+        info.value(QStringLiteral("image")).toString(),
+        info.value(QStringLiteral("created")).toString(),
+        info.value(QStringLiteral("mode")).toString()
     );
 }
 
