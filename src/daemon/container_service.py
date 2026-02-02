@@ -420,11 +420,11 @@ class ContainerService:
                 instance = await self._incus.get_instance(c.name)
                 config = instance.config or {}
                 if config.get(KAPSULE_DBUS_MUX_KEY) == "true":
-                    mode = "dbus-mux"
+                    mode = "DbusMux"
                 elif config.get(KAPSULE_SESSION_MODE_KEY) == "true":
-                    mode = "session"
+                    mode = "Session"
                 else:
-                    mode = "default"
+                    mode = "Default"
             except IncusError:
                 mode = "unknown"
 

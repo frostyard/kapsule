@@ -24,6 +24,7 @@ qt_add_dbus_interface(kapsule_dbus_SRCS
 set(kapsule_SRCS
     kapsuleclient.cpp
     container.cpp
+    types.cpp
     ${kapsule_dbus_SRCS}
 )
 

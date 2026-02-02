@@ -9,11 +9,13 @@
 #include <QString>
 #include <QStringList>
 #include <QMetaType>
+#include <QMetaEnum>
 #include <functional>
 
 #include "kapsule_export.h"
 
 namespace Kapsule {
+Q_NAMESPACE_EXPORT(KAPSULE_EXPORT)
 
 /**
  * @enum ContainerMode
@@ -24,6 +26,7 @@ enum class ContainerMode {
     Session,    ///< Container has its own D-Bus session bus
     DbusMux     ///< D-Bus multiplexer for hybrid host/container access
 };
+Q_ENUM_NS(ContainerMode)
 
 /**
  * @enum MessageType
@@ -39,6 +42,7 @@ enum class MessageType {
     Dim = 4,
     Hint = 5
 };
+Q_ENUM_NS(MessageType)
 
 /**
  * @brief Result of an async operation.
@@ -67,32 +71,21 @@ struct KAPSULE_EXPORT EnterResult {
 using ProgressHandler = std::function<void(MessageType type, const QString &message, int indentLevel)>;
 
 /**
- * @brief Convert ContainerMode to string.
+ * @brief Convert ContainerMode to string using Qt meta-enum.
  */
 inline QString containerModeToString(ContainerMode mode)
 {
-    switch (mode) {
-    case ContainerMode::Default:
-        return QStringLiteral("default");
-    case ContainerMode::Session:
-        return QStringLiteral("session");
-    case ContainerMode::DbusMux:
-        return QStringLiteral("dbus-mux");
-    }
-    return QStringLiteral("unknown");
+    return QString::fromLatin1(QMetaEnum::fromType<ContainerMode>().valueToKey(static_cast<int>(mode)));
 }
 
 /**
- * @brief Convert string to ContainerMode.
+ * @brief Convert string to ContainerMode using Qt meta-enum.
  */
 inline ContainerMode containerModeFromString(const QString &str)
 {
-    if (str == QStringLiteral("session")) {
-        return ContainerMode::Session;
-    } else if (str == QStringLiteral("dbus-mux") || str == QStringLiteral("dbusmux")) {
-        return ContainerMode::DbusMux;
-    }
-    return ContainerMode::Default;
+    bool ok = false;
+    int value = QMetaEnum::fromType<ContainerMode>().keyToValue(str.toLatin1().constData(), &ok);
+    return ok ? static_cast<ContainerMode>(value) : ContainerMode::Default;
 }
 
 } // namespace Kapsule
