@@ -30,6 +30,7 @@ set(kapsule_SRCS
 set(kapsule_HEADERS
     kapsuleclient.h
     container.h
+    types.h
 )
 
 add_library(KapsuleQt ${kapsule_SRCS})
@@ -55,6 +56,7 @@ ecm_generate_headers(KapsuleQt_CamelCase_HEADERS
     HEADER_NAMES
         KapsuleClient
         Container
+        Types
     PREFIX Kapsule
     REQUIRED_HEADERS kapsule_HEADERS
 )
@@ -80,9 +82,11 @@ target_include_directories(KapsuleQt
 target_link_libraries(KapsuleQt
     PUBLIC
         Qt6::Core
+        QCoro6::Core
     PRIVATE
         Qt6::DBus
         Qt6::Concurrent
+        QCoro6::DBus
         KF6::CoreAddons
         KF6::I18n
 )

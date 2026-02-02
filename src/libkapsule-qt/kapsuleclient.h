@@ -9,11 +9,14 @@
 #include <QObject>
 #include <QString>
 #include <QList>
-#include <QFuture>
+#include <QVariantMap>
 #include <memory>
+
+#include <qcoro/qcorotask.h>
 
 #include "kapsule_export.h"
 #include "container.h"
+#include "types.h"
 
 namespace Kapsule {
 
@@ -23,18 +26,21 @@ class KapsuleClientPrivate;
  * @class KapsuleClient
  * @brief Qt client for communicating with the kapsule-daemon via D-Bus.
  *
- * This class provides a Qt-friendly API for managing Incus containers
- * through the kapsule-daemon service.
+ * This class provides a Qt-friendly async API using C++20 coroutines (QCoro)
+ * for managing Incus containers through the kapsule-daemon service.
  *
  * @code
- * auto client = new Kapsule::KapsuleClient(this);
- * connect(client, &KapsuleClient::containersChanged, this, &MyClass::updateContainerList);
+ * KapsuleClient client;
+ * 
+ * // List containers (coroutine)
+ * auto containers = co_await client.listContainers();
  *
- * // List containers
- * auto containers = client->containers();
- *
- * // Create a new container
- * client->createContainer("dev-ubuntu", "ubuntu:24.04");
+ * // Create a new container with progress
+ * auto result = co_await client.createContainer("dev-ubuntu", "ubuntu:24.04",
+ *     ContainerMode::Default,
+ *     [](MessageType type, const QString &msg, int) {
+ *         qDebug() << msg;
+ *     });
  * @endcode
  *
  * @since 0.1
@@ -50,10 +56,10 @@ class KAPSULE_EXPORT KapsuleClient : public QObject
     Q_PROPERTY(bool connected READ isConnected NOTIFY connectedChanged)
 
     /**
-     * @property containers
-     * @brief List of available containers.
+     * @property daemonVersion
+     * @brief The version of the connected daemon.
      */
-    Q_PROPERTY(QList<Container> containers READ containers NOTIFY containersChanged)
+    Q_PROPERTY(QString daemonVersion READ daemonVersion NOTIFY connectedChanged)
 
 public:
     /**
@@ -74,63 +80,95 @@ public:
     [[nodiscard]] bool isConnected() const;
 
     /**
-     * @brief Returns the list of available containers.
+     * @brief Returns the daemon version string.
+     * @return The version, or empty string if not connected.
+     */
+    [[nodiscard]] QString daemonVersion() const;
+
+    // =========================================================================
+    // Coroutine-based API
+    // =========================================================================
+
+    /**
+     * @brief List all containers.
      * @return List of Container objects.
      */
-    [[nodiscard]] QList<Container> containers() const;
+    QCoro::Task<QList<Container>> listContainers();
 
     /**
-     * @brief Finds a container by name.
-     * @param name The container name to search for.
-     * @return The Container if found, or an invalid Container otherwise.
+     * @brief Get a specific container by name.
+     * @param name The container name.
+     * @return The Container, or invalid container if not found.
      */
-    [[nodiscard]] Container container(const QString &name) const;
+    QCoro::Task<Container> container(const QString &name);
 
-public Q_SLOTS:
     /**
-     * @brief Refreshes the list of containers from the daemon.
+     * @brief Get user configuration from daemon.
+     * @return Map of config keys to values.
      */
-    void refresh();
+    QCoro::Task<QVariantMap> config();
 
     /**
-     * @brief Creates a new container.
+     * @brief Create a new container.
      * @param name The name for the new container.
-     * @param image The base image to use (e.g., "ubuntu:24.04").
-     * @param features Optional list of features to enable.
-     * @return A future that resolves when the container is created.
+     * @param image The base image to use (e.g., "ubuntu:24.04"), empty for default.
+     * @param mode The D-Bus integration mode.
+     * @param progress Optional callback for progress messages.
+     * @return Operation result with success/error info.
      */
-    QFuture<bool> createContainer(const QString &name,
-                                   const QString &image,
-                                   const QStringList &features = {});
+    QCoro::Task<OperationResult> createContainer(
+        const QString &name,
+        const QString &image,
+        ContainerMode mode = ContainerMode::Default,
+        ProgressHandler progress = {});
 
     /**
-     * @brief Starts a container.
-     * @param name The name of the container to start.
-     * @return A future that resolves when the container is started.
+     * @brief Delete a container.
+     * @param name The container name.
+     * @param force Force removal even if running.
+     * @param progress Optional callback for progress messages.
+     * @return Operation result with success/error info.
      */
-    QFuture<bool> startContainer(const QString &name);
+    QCoro::Task<OperationResult> deleteContainer(
+        const QString &name,
+        bool force = false,
+        ProgressHandler progress = {});
 
     /**
-     * @brief Stops a container.
-     * @param name The name of the container to stop.
-     * @return A future that resolves when the container is stopped.
+     * @brief Start a stopped container.
+     * @param name The container name.
+     * @param progress Optional callback for progress messages.
+     * @return Operation result with success/error info.
      */
-    QFuture<bool> stopContainer(const QString &name);
+    QCoro::Task<OperationResult> startContainer(
+        const QString &name,
+        ProgressHandler progress = {});
 
     /**
-     * @brief Removes a container.
-     * @param name The name of the container to remove.
-     * @param force If true, force removal even if running.
-     * @return A future that resolves when the container is removed.
+     * @brief Stop a running container.
+     * @param name The container name.
+     * @param force Force stop the container.
+     * @param progress Optional callback for progress messages.
+     * @return Operation result with success/error info.
      */
-    QFuture<bool> removeContainer(const QString &name, bool force = false);
+    QCoro::Task<OperationResult> stopContainer(
+        const QString &name,
+        bool force = false,
+        ProgressHandler progress = {});
 
     /**
-     * @brief Enters a container (opens a terminal session).
-     * @param name The name of the container to enter.
-     * @param command Optional command to run instead of default shell.
+     * @brief Prepare to enter a container.
+     *
+     * This handles all setup: container creation, user setup, symlinks.
+     * Returns exec args for the caller to execvp().
+     *
+     * @param containerName Container to enter (empty for default).
+     * @param command Command to run inside (empty for shell).
+     * @return Enter result with success/error and exec args.
      */
-    void enterContainer(const QString &name, const QString &command = {});
+    QCoro::Task<EnterResult> prepareEnter(
+        const QString &containerName = {},
+        const QStringList &command = {});
 
 Q_SIGNALS:
     /**
@@ -140,15 +178,11 @@ Q_SIGNALS:
     void connectedChanged(bool connected);
 
     /**
-     * @brief Emitted when the container list changes.
-     */
-    void containersChanged();
-
-    /**
      * @brief Emitted when a container's state changes.
-     * @param name The name of the container that changed.
+     * @param name The name of the container.
+     * @param state The new state.
      */
-    void containerStateChanged(const QString &name);
+    void containerStateChanged(const QString &name, Container::State state);
 
     /**
      * @brief Emitted when an error occurs.

@@ -334,6 +334,14 @@ if(BUILD_KDE_COMPONENTS)
         Config
     )
 
+    # QCoro for C++20 coroutines with Qt
+    find_package(QCoro6 REQUIRED COMPONENTS Core DBus)
+    qcoro_enable_coroutines()
+
+    # Ensure C++20 is used (required for QCoro)
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
     # Optional dependencies for additional components
     find_package(KF6KIO ${REQUIRED_KF_VERSION})
     set_package_properties(KF6KIO PROPERTIES
@@ -355,6 +363,9 @@ if(BUILD_KDE_COMPONENTS)
 
     # Build libkapsule-qt
     add_subdirectory(src/libkapsule-qt)
+
+    # Build C++ CLI
+    add_subdirectory(src/cli)
 
     if(KF6KIO_FOUND)
         # add_subdirectory(src/kio)  # TODO: Enable when KIO worker is implemented

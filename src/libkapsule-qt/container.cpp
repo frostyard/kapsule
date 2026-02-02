@@ -10,7 +10,7 @@
 namespace Kapsule {
 
 // ============================================================================
-// Private data class
+// ContainerData (implicitly shared)
 // ============================================================================
 
 class ContainerData : public QSharedData
@@ -18,18 +18,22 @@ class ContainerData : public QSharedData
 public:
     ContainerData() = default;
 
-    explicit ContainerData(const QString &containerName)
-        : name(containerName)
+    ContainerData(const QString &name, Container::State state,
+                  const QString &image, ContainerMode mode,
+                  const QDateTime &created)
+        : name(name)
+        , state(state)
+        , image(image)
+        , mode(mode)
+        , created(created)
     {
     }
-
-    ContainerData(const ContainerData &other) = default;
 
     QString name;
     Container::State state = Container::State::Unknown;
     QString image;
-    QStringList features;
-    QDateTime createdAt;
+    ContainerMode mode = ContainerMode::Default;
+    QDateTime created;
 };
 
 // ============================================================================
@@ -37,23 +41,20 @@ public:
 // ============================================================================
 
 Container::Container()
-    : d(new ContainerData())
+    : d(new ContainerData)
 {
 }
 
 Container::Container(const QString &name)
-    : d(new ContainerData(name))
+    : d(new ContainerData)
 {
+    d->name = name;
 }
 
 Container::Container(const Container &other) = default;
-
 Container::Container(Container &&other) noexcept = default;
-
 Container::~Container() = default;
-
 Container &Container::operator=(const Container &other) = default;
-
 Container &Container::operator=(Container &&other) noexcept = default;
 
 bool Container::isValid() const
@@ -76,14 +77,14 @@ QString Container::image() const
     return d->image;
 }
 
-QStringList Container::features() const
+ContainerMode Container::mode() const
 {
-    return d->features;
+    return d->mode;
 }
 
-QDateTime Container::createdAt() const
+QDateTime Container::created() const
 {
-    return d->createdAt;
+    return d->created;
 }
 
 bool Container::isRunning() const
@@ -99,6 +100,41 @@ bool Container::operator==(const Container &other) const
 bool Container::operator!=(const Container &other) const
 {
     return !(*this == other);
+}
+
+// ============================================================================
+// Factory method for internal use
+// ============================================================================
+
+Container Container::fromData(const QString &name, const QString &status,
+                               const QString &image, const QString &created,
+                               const QString &mode)
+{
+    Container c;
+    c.d->name = name;
+    c.d->image = image;
+    c.d->mode = containerModeFromString(mode);
+
+    // Parse created timestamp
+    c.d->created = QDateTime::fromString(created, Qt::ISODate);
+
+    // Parse status to state
+    QString statusLower = status.toLower();
+    if (statusLower == QLatin1String("running")) {
+        c.d->state = State::Running;
+    } else if (statusLower == QLatin1String("stopped")) {
+        c.d->state = State::Stopped;
+    } else if (statusLower == QLatin1String("starting")) {
+        c.d->state = State::Starting;
+    } else if (statusLower == QLatin1String("stopping")) {
+        c.d->state = State::Stopping;
+    } else if (statusLower == QLatin1String("error")) {
+        c.d->state = State::Error;
+    } else {
+        c.d->state = State::Unknown;
+    }
+
+    return c;
 }
 
 } // namespace Kapsule

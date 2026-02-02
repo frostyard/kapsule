@@ -13,6 +13,7 @@
 #include <QSharedDataPointer>
 
 #include "kapsule_export.h"
+#include "types.h"
 
 namespace Kapsule {
 
@@ -34,8 +35,8 @@ class KAPSULE_EXPORT Container
     Q_PROPERTY(QString name READ name)
     Q_PROPERTY(State state READ state)
     Q_PROPERTY(QString image READ image)
-    Q_PROPERTY(QStringList features READ features)
-    Q_PROPERTY(QDateTime createdAt READ createdAt)
+    Q_PROPERTY(ContainerMode mode READ mode)
+    Q_PROPERTY(QDateTime created READ created)
 
 public:
     /**
@@ -113,16 +114,16 @@ public:
     [[nodiscard]] QString image() const;
 
     /**
-     * @brief Returns the list of features enabled for this container.
-     * @return List of feature names.
+     * @brief Returns the D-Bus integration mode for this container.
+     * @return The container mode.
      */
-    [[nodiscard]] QStringList features() const;
+    [[nodiscard]] ContainerMode mode() const;
 
     /**
      * @brief Returns when the container was created.
      * @return The creation timestamp.
      */
-    [[nodiscard]] QDateTime createdAt() const;
+    [[nodiscard]] QDateTime created() const;
 
     /**
      * @brief Returns whether the container is running.
@@ -139,6 +140,14 @@ public:
      * @brief Inequality operator.
      */
     bool operator!=(const Container &other) const;
+
+    /**
+     * @brief Factory method to create a Container from D-Bus data.
+     * @internal
+     */
+    static Container fromData(const QString &name, const QString &status,
+                               const QString &image, const QString &created,
+                               const QString &mode);
 
 private:
     QSharedDataPointer<ContainerData> d;

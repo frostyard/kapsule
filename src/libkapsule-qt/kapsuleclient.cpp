@@ -4,14 +4,14 @@
 */
 
 #include "kapsuleclient.h"
-#include "container.h"
+#include "kapsule_debug.h"
+#include "kapsulemanagerinterface.h"
 
 #include <QDBusConnection>
-#include <QDBusInterface>
-#include <QDBusPendingCall>
 #include <QDBusPendingReply>
-#include <QDebug>
-#include <QFutureInterface>
+
+#include <qcoro/qcorodbuspendingcall.h>
+#include <qcoro/qcorotimer.h>
 
 namespace Kapsule {
 
@@ -23,14 +23,14 @@ class KapsuleClientPrivate
 {
 public:
     explicit KapsuleClientPrivate(KapsuleClient *q);
-    ~KapsuleClientPrivate();
 
     void connectToDaemon();
-    void handleContainersChanged();
+    void subscribeToSignals();
+    QCoro::Task<OperationResult> waitForOperation(const QString &opId, ProgressHandler progress);
 
     KapsuleClient *q_ptr;
-    QDBusInterface *dbusInterface = nullptr;
-    QList<Container> containerList;
+    std::unique_ptr<OrgKdeKapsuleManagerInterface> interface;
+    QString daemonVersion;
     bool connected = false;
 };
 
@@ -40,48 +40,80 @@ KapsuleClientPrivate::KapsuleClientPrivate(KapsuleClient *q)
     connectToDaemon();
 }
 
-KapsuleClientPrivate::~KapsuleClientPrivate()
-{
-    delete dbusInterface;
-}
-
 void KapsuleClientPrivate::connectToDaemon()
 {
-    // TODO: Connect to org.kde.kapsule D-Bus service
-    // For now, this is a stub implementation
-
-    // Try to connect to session bus first, fall back to system bus
-    QDBusConnection bus = QDBusConnection::sessionBus();
-
-    dbusInterface = new QDBusInterface(
+    interface = std::make_unique<OrgKdeKapsuleManagerInterface>(
         QStringLiteral("org.kde.kapsule"),
         QStringLiteral("/org/kde/kapsule"),
-        QStringLiteral("org.kde.kapsule.Manager"),
-        bus
+        QDBusConnection::systemBus()
     );
 
-    if (dbusInterface->isValid()) {
+    if (interface->isValid()) {
         connected = true;
-        Q_EMIT q_ptr->connectedChanged(true);
-
-        // Connect to signals
-        bus.connect(
-            QStringLiteral("org.kde.kapsule"),
-            QStringLiteral("/org/kde/kapsule"),
-            QStringLiteral("org.kde.kapsule.Manager"),
-            QStringLiteral("ContainersChanged"),
-            q_ptr,
-            SLOT(refresh())
-        );
+        daemonVersion = interface->version();
+        qCDebug(KAPSULE_LOG) << "Connected to kapsule-daemon version" << daemonVersion;
+        subscribeToSignals();
     } else {
-        qDebug() << "KapsuleClient: Could not connect to kapsule-daemon";
+        qCWarning(KAPSULE_LOG) << "Failed to connect to kapsule-daemon:"
+                               << interface->lastError().message();
         connected = false;
     }
 }
 
-void KapsuleClientPrivate::handleContainersChanged()
+void KapsuleClientPrivate::subscribeToSignals()
 {
-    Q_EMIT q_ptr->containersChanged();
+    // We subscribe to signals per-operation in waitForOperation()
+}
+
+QCoro::Task<OperationResult> KapsuleClientPrivate::waitForOperation(
+    const QString &opId,
+    ProgressHandler progress)
+{
+    struct OpState {
+        bool completed = false;
+        bool success = false;
+        QString error;
+    };
+    auto state = std::make_shared<OpState>();
+
+    // Connect to signals for this operation
+    QMetaObject::Connection completedConn;
+    QMetaObject::Connection messageConn;
+
+    completedConn = QObject::connect(
+        interface.get(),
+        &OrgKdeKapsuleManagerInterface::OperationCompleted,
+        [state, opId](const QString &id, bool ok, const QString &msg) {
+            if (id == opId) {
+                state->completed = true;
+                state->success = ok;
+                state->error = msg;
+            }
+        });
+
+    if (progress) {
+        messageConn = QObject::connect(
+            interface.get(),
+            &OrgKdeKapsuleManagerInterface::OperationMessage,
+            [progress, opId](const QString &id, int type, const QString &msg, int indent) {
+                if (id == opId) {
+                    progress(static_cast<MessageType>(type), msg, indent);
+                }
+            });
+    }
+
+    // Poll until completed (QCoro doesn't have a TaskCompletionSource equivalent yet)
+    // This is a simple approach; could be improved with proper signal-to-coroutine
+    while (!state->completed) {
+        co_await QCoro::sleepFor(std::chrono::milliseconds(50));
+    }
+
+    QObject::disconnect(completedConn);
+    if (progress) {
+        QObject::disconnect(messageConn);
+    }
+
+    co_return OperationResult{state->success, state->error};
 }
 
 // ============================================================================
@@ -101,131 +133,181 @@ bool KapsuleClient::isConnected() const
     return d->connected;
 }
 
-QList<Container> KapsuleClient::containers() const
+QString KapsuleClient::daemonVersion() const
 {
-    return d->containerList;
+    return d->daemonVersion;
 }
 
-Container KapsuleClient::container(const QString &name) const
-{
-    for (const auto &c : d->containerList) {
-        if (c.name() == name) {
-            return c;
-        }
-    }
-    return Container();
-}
-
-void KapsuleClient::refresh()
+QCoro::Task<QList<Container>> KapsuleClient::listContainers()
 {
     if (!d->connected) {
-        return;
+        co_return {};
     }
 
-    // TODO: Call D-Bus method to get container list
-    // For now, this is a stub
-    qDebug() << "KapsuleClient::refresh() - stub implementation";
+    // Call D-Bus method
+    auto reply = co_await d->interface->ListContainers();
+    if (reply.isError()) {
+        qCWarning(KAPSULE_LOG) << "ListContainers failed:" << reply.error().message();
+        co_return {};
+    }
 
-    d->handleContainersChanged();
+    // Parse response: array of (name, status, image, created, mode)
+    QList<Container> result;
+    const auto &containers = reply.value();
+    for (const auto &c : containers) {
+        Container container;
+        // Use the private data to construct - we'll need a factory method
+        // For now, create with the data we have
+        container = Container::fromData(
+            std::get<0>(c),  // name
+            std::get<1>(c),  // status
+            std::get<2>(c),  // image
+            std::get<3>(c),  // created
+            std::get<4>(c)   // mode
+        );
+        result.append(container);
+    }
+
+    co_return result;
 }
 
-QFuture<bool> KapsuleClient::createContainer(const QString &name,
-                                              const QString &image,
-                                              const QStringList &features)
+QCoro::Task<Container> KapsuleClient::container(const QString &name)
 {
-    QFutureInterface<bool> futureInterface;
-    futureInterface.reportStarted();
-
     if (!d->connected) {
-        Q_EMIT errorOccurred(tr("Not connected to kapsule-daemon"));
-        futureInterface.reportResult(false);
-        futureInterface.reportFinished();
-        return futureInterface.future();
+        co_return Container{};
     }
 
-    // TODO: Call D-Bus method to create container
-    qDebug() << "KapsuleClient::createContainer() - stub implementation"
-             << name << image << features;
+    auto reply = co_await d->interface->GetContainerInfo(name);
+    if (reply.isError()) {
+        qCWarning(KAPSULE_LOG) << "GetContainerInfo failed:" << reply.error().message();
+        co_return Container{};
+    }
 
-    futureInterface.reportResult(false);
-    futureInterface.reportFinished();
-    return futureInterface.future();
+    const auto &info = reply.value();
+    co_return Container::fromData(
+        info.value(QStringLiteral("name")),
+        info.value(QStringLiteral("status")),
+        info.value(QStringLiteral("image")),
+        info.value(QStringLiteral("created")),
+        info.value(QStringLiteral("mode"))
+    );
 }
 
-QFuture<bool> KapsuleClient::startContainer(const QString &name)
+QCoro::Task<QVariantMap> KapsuleClient::config()
 {
-    QFutureInterface<bool> futureInterface;
-    futureInterface.reportStarted();
-
     if (!d->connected) {
-        Q_EMIT errorOccurred(tr("Not connected to kapsule-daemon"));
-        futureInterface.reportResult(false);
-        futureInterface.reportFinished();
-        return futureInterface.future();
+        co_return {{QStringLiteral("error"), QStringLiteral("Not connected")}};
     }
 
-    // TODO: Call D-Bus method to start container
-    qDebug() << "KapsuleClient::startContainer() - stub implementation" << name;
+    auto reply = co_await d->interface->GetConfig();
+    if (reply.isError()) {
+        co_return {{QStringLiteral("error"), reply.error().message()}};
+    }
 
-    futureInterface.reportResult(false);
-    futureInterface.reportFinished();
-    return futureInterface.future();
+    // Convert QMap<QString, QString> to QVariantMap
+    QVariantMap result;
+    const auto &config = reply.value();
+    for (auto it = config.cbegin(); it != config.cend(); ++it) {
+        result.insert(it.key(), it.value());
+    }
+    co_return result;
 }
 
-QFuture<bool> KapsuleClient::stopContainer(const QString &name)
+QCoro::Task<OperationResult> KapsuleClient::createContainer(
+    const QString &name,
+    const QString &image,
+    ContainerMode mode,
+    ProgressHandler progress)
 {
-    QFutureInterface<bool> futureInterface;
-    futureInterface.reportStarted();
-
     if (!d->connected) {
-        Q_EMIT errorOccurred(tr("Not connected to kapsule-daemon"));
-        futureInterface.reportResult(false);
-        futureInterface.reportFinished();
-        return futureInterface.future();
+        co_return {false, QStringLiteral("Not connected to daemon")};
     }
 
-    // TODO: Call D-Bus method to stop container
-    qDebug() << "KapsuleClient::stopContainer() - stub implementation" << name;
+    bool sessionMode = (mode == ContainerMode::Session || mode == ContainerMode::DbusMux);
+    bool dbusMux = (mode == ContainerMode::DbusMux);
 
-    futureInterface.reportResult(false);
-    futureInterface.reportFinished();
-    return futureInterface.future();
+    auto reply = co_await d->interface->CreateContainer(name, image, sessionMode, dbusMux);
+    if (reply.isError()) {
+        co_return {false, reply.error().message()};
+    }
+
+    // The reply is the operation ID - wait for completion
+    QString opId = reply.value();
+    co_return co_await d->waitForOperation(opId, progress);
 }
 
-QFuture<bool> KapsuleClient::removeContainer(const QString &name, bool force)
+QCoro::Task<OperationResult> KapsuleClient::deleteContainer(
+    const QString &name,
+    bool force,
+    ProgressHandler progress)
 {
-    QFutureInterface<bool> futureInterface;
-    futureInterface.reportStarted();
-
     if (!d->connected) {
-        Q_EMIT errorOccurred(tr("Not connected to kapsule-daemon"));
-        futureInterface.reportResult(false);
-        futureInterface.reportFinished();
-        return futureInterface.future();
+        co_return {false, QStringLiteral("Not connected to daemon")};
     }
 
-    // TODO: Call D-Bus method to remove container
-    qDebug() << "KapsuleClient::removeContainer() - stub implementation"
-             << name << force;
+    auto reply = co_await d->interface->DeleteContainer(name, force);
+    if (reply.isError()) {
+        co_return {false, reply.error().message()};
+    }
 
-    futureInterface.reportResult(false);
-    futureInterface.reportFinished();
-    return futureInterface.future();
+    QString opId = reply.value();
+    co_return co_await d->waitForOperation(opId, progress);
 }
 
-void KapsuleClient::enterContainer(const QString &name, const QString &command)
+QCoro::Task<OperationResult> KapsuleClient::startContainer(
+    const QString &name,
+    ProgressHandler progress)
 {
     if (!d->connected) {
-        Q_EMIT errorOccurred(tr("Not connected to kapsule-daemon"));
-        return;
+        co_return {false, QStringLiteral("Not connected to daemon")};
     }
 
-    // TODO: Call D-Bus method to enter container
-    // This would typically open a terminal with the container shell
-    qDebug() << "KapsuleClient::enterContainer() - stub implementation"
-             << name << command;
+    auto reply = co_await d->interface->StartContainer(name);
+    if (reply.isError()) {
+        co_return {false, reply.error().message()};
+    }
+
+    QString opId = reply.value();
+    co_return co_await d->waitForOperation(opId, progress);
+}
+
+QCoro::Task<OperationResult> KapsuleClient::stopContainer(
+    const QString &name,
+    bool force,
+    ProgressHandler progress)
+{
+    if (!d->connected) {
+        co_return {false, QStringLiteral("Not connected to daemon")};
+    }
+
+    auto reply = co_await d->interface->StopContainer(name, force);
+    if (reply.isError()) {
+        co_return {false, reply.error().message()};
+    }
+
+    QString opId = reply.value();
+    co_return co_await d->waitForOperation(opId, progress);
+}
+
+QCoro::Task<EnterResult> KapsuleClient::prepareEnter(
+    const QString &containerName,
+    const QStringList &command)
+{
+    if (!d->connected) {
+        co_return {false, QStringLiteral("Not connected to daemon"), {}};
+    }
+
+    auto reply = co_await d->interface->PrepareEnter(containerName, command);
+    if (reply.isError()) {
+        co_return {false, reply.error().message(), {}};
+    }
+
+    const auto &result = reply.value();
+    co_return EnterResult{
+        std::get<0>(result),  // success
+        std::get<1>(result),  // error
+        std::get<2>(result)   // execArgs
+    };
 }
 
 } // namespace Kapsule
-
-#include "moc_kapsuleclient.cpp"
