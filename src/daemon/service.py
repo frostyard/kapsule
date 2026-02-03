@@ -18,6 +18,9 @@ from .dbus_types import (
     DBusUInt32,
     DBusStrArray,
     DBusStrDict,
+    DBusContainer,
+    DBusContainerList,
+    DBusEnterResult,
     dbus_property,
     method,
     signal,
@@ -416,7 +419,7 @@ class KapsuleManagerInterface(ServiceInterface):
     # =========================================================================
 
     @method()
-    async def ListContainers(self) -> Annotated[list[tuple[str, str, str, str, str]], "a(sssss)"]:
+    async def ListContainers(self) -> DBusContainerList:
         """List all containers.
 
         Returns:
@@ -425,7 +428,7 @@ class KapsuleManagerInterface(ServiceInterface):
         return await self._service.list_containers()
 
     @method()
-    async def GetContainerInfo(self, name: DBusStr) -> Annotated[tuple[str, str, str, str, str], "(sssss)"]:
+    async def GetContainerInfo(self, name: DBusStr) -> DBusContainer:
         """Get information about a container.
 
         Args:
@@ -467,7 +470,7 @@ class KapsuleManagerInterface(ServiceInterface):
         self,
         container_name: DBusStr,
         command: DBusStrArray,
-    ) -> Annotated[tuple[bool, str, list[str]], "(bsas)"]:
+    ) -> DBusEnterResult:
         """Prepare to enter a container.
 
         This method handles all setup for entering a container:

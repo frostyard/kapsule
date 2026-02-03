@@ -45,29 +45,97 @@ class DBusProperty:
     doc: str | None = None
 
 
-# Mapping of type aliases to D-Bus signatures (from dbus_types.py)
-TYPE_ALIASES = {
-    "DBusStr": "s",
-    "DBusObjectPath": "o",
-    "DBusSignature": "g",
-    "DBusBool": "b",
-    "DBusByte": "y",
-    "DBusInt16": "n",
-    "DBusUInt16": "q",
-    "DBusInt32": "i",
-    "DBusUInt32": "u",
-    "DBusInt64": "x",
-    "DBusUInt64": "t",
-    "DBusDouble": "d",
-    "DBusUnixFD": "h",
-    "DBusStrArray": "as",
-    "DBusStrDict": "a{ss}",
+@dataclass
+class TypeAliasInfo:
+    """Information about a D-Bus type alias."""
+    dbus_sig: str
+    cpp_type: str | None = None  # C++ type for Qt annotation, if specified
+
+
+# Mapping of type aliases to D-Bus signatures and optional C++ types
+# This will be populated by parsing dbus_types.py
+TYPE_ALIASES: dict[str, TypeAliasInfo] = {}
+
+# Builtin type mappings (always available)
+BUILTIN_TYPE_ALIASES = {
+    "DBusStr": TypeAliasInfo("s"),
+    "DBusObjectPath": TypeAliasInfo("o"),
+    "DBusSignature": TypeAliasInfo("g"),
+    "DBusBool": TypeAliasInfo("b"),
+    "DBusByte": TypeAliasInfo("y"),
+    "DBusInt16": TypeAliasInfo("n"),
+    "DBusUInt16": TypeAliasInfo("q"),
+    "DBusInt32": TypeAliasInfo("i"),
+    "DBusUInt32": TypeAliasInfo("u"),
+    "DBusInt64": TypeAliasInfo("x"),
+    "DBusUInt64": TypeAliasInfo("t"),
+    "DBusDouble": TypeAliasInfo("d"),
+    "DBusUnixFD": TypeAliasInfo("h"),
+    "DBusStrArray": TypeAliasInfo("as"),
+    "DBusStrDict": TypeAliasInfo("a{ss}"),
     # Basic Python types
-    "str": "s",
-    "bool": "b",
-    "int": "i",
-    "float": "d",
+    "str": TypeAliasInfo("s"),
+    "bool": TypeAliasInfo("b"),
+    "int": TypeAliasInfo("i"),
+    "float": TypeAliasInfo("d"),
 }
+
+
+def parse_dbus_types(dbus_types_path: Path) -> dict[str, TypeAliasInfo]:
+    """Parse dbus_types.py to extract type alias definitions with CppType metadata.
+    
+    Returns a dict mapping type alias names to TypeAliasInfo.
+    """
+    source = dbus_types_path.read_text()
+    tree = ast.parse(source)
+    
+    type_aliases: dict[str, TypeAliasInfo] = {}
+    
+    for node in ast.walk(tree):
+        # Look for assignments like: DBusContainer = Annotated[..., "sig", CppType("...")]
+        if isinstance(node, ast.Assign):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                name = node.targets[0].id
+                if name.startswith("DBus"):
+                    info = extract_type_alias_info(node.value)
+                    if info:
+                        type_aliases[name] = info
+    
+    return type_aliases
+
+
+def extract_type_alias_info(value: ast.expr) -> TypeAliasInfo | None:
+    """Extract TypeAliasInfo from an Annotated type expression."""
+    if not isinstance(value, ast.Subscript):
+        return None
+    
+    # Check if it's Annotated[...]
+    if not (isinstance(value.value, ast.Name) and value.value.id == "Annotated"):
+        return None
+    
+    if not isinstance(value.slice, ast.Tuple):
+        return None
+    
+    elts = value.slice.elts
+    if len(elts) < 2:
+        return None
+    
+    # Second element should be the D-Bus signature string
+    sig_elt = elts[1]
+    if not (isinstance(sig_elt, ast.Constant) and isinstance(sig_elt.value, str)):
+        return None
+    
+    dbus_sig = sig_elt.value
+    cpp_type = None
+    
+    # Look for CppType("...") in remaining elements
+    for elt in elts[2:]:
+        if isinstance(elt, ast.Call):
+            if isinstance(elt.func, ast.Name) and elt.func.id == "CppType":
+                if elt.args and isinstance(elt.args[0], ast.Constant):
+                    cpp_type = elt.args[0].value
+    
+    return TypeAliasInfo(dbus_sig=dbus_sig, cpp_type=cpp_type)
 
 
 def extract_annotated_signature(annotation: ast.expr) -> str | None:
@@ -98,7 +166,10 @@ def resolve_type(annotation: ast.expr | None) -> str:
     # Handle Name types (simple type references)
     if isinstance(annotation, ast.Name):
         type_name = annotation.id
-        return TYPE_ALIASES.get(type_name, "v")
+        info = TYPE_ALIASES.get(type_name)
+        if info:
+            return info.dbus_sig
+        return "v"
     
     # Handle Attribute types (e.g., typing.List)
     if isinstance(annotation, ast.Attribute):
@@ -111,7 +182,8 @@ def resolve_type(annotation: ast.expr | None) -> str:
             
             if container in ("list", "List"):
                 if isinstance(annotation.slice, ast.Name):
-                    elem_type = TYPE_ALIASES.get(annotation.slice.id, "v")
+                    info = TYPE_ALIASES.get(annotation.slice.id)
+                    elem_type = info.dbus_sig if info else "v"
                     return f"a{elem_type}"
                 return "av"
             
@@ -132,14 +204,14 @@ def resolve_type(annotation: ast.expr | None) -> str:
     # Handle Constant (string literal type hints)
     if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
         # Could be a forward reference or a signature
-        if annotation.value in TYPE_ALIASES:
-            return TYPE_ALIASES[annotation.value]
+        info = TYPE_ALIASES.get(annotation.value)
+        if info:
+            return info.dbus_sig
         # Check if it looks like a D-Bus signature
         if re.match(r'^[sybnqiuxtdoghvas{}\(\)]+$', annotation.value):
             return annotation.value
     
     return "v"
-
 
 def parse_service_interface(source_path: Path) -> tuple[list[DBusMethod], list[DBusSignal], list[DBusProperty]]:
     """Parse the service.py file to extract D-Bus interface definitions."""
@@ -232,15 +304,6 @@ DBUS_TO_CPP_TYPE = {
     "as": "QStringList",
     "a{ss}": "QVariantMap",
     "a{sv}": "QVariantMap",
-}
-
-# Map specific D-Bus signatures to Kapsule library types
-# These types have proper QDBusArgument streaming operators defined
-# Note: Values must be XML-escaped (use &lt; and &gt; for angle brackets)
-KAPSULE_TYPE_MAP = {
-    "(sssss)": "Kapsule::Container",                  # Container class with D-Bus streaming
-    "a(sssss)": "QList&lt;Kapsule::Container&gt;",   # List of containers (Qt handles QList<T> automatically)
-    "(bsas)": "Kapsule::EnterResult",                 # PrepareEnter result
 }
 
 
@@ -343,6 +406,19 @@ def dbus_sig_to_cpp_type(sig: str) -> str:
     return "QVariant"
 
 
+def get_cpp_type_for_signature(dbus_sig: str) -> str | None:
+    """Look up a C++ type for a D-Bus signature from TYPE_ALIASES.
+    
+    Returns the CppType value if any type alias with that signature has one,
+    otherwise None.
+    """
+    for info in TYPE_ALIASES.values():
+        if info.dbus_sig == dbus_sig and info.cpp_type:
+            # XML-escape angle brackets for annotations
+            return info.cpp_type.replace("<", "&lt;").replace(">", "&gt;")
+    return None
+
+
 def dbus_type_to_qt_type(dbus_sig: str) -> str | None:
     """Convert a D-Bus signature to a Qt/C++ type name for annotations.
     
@@ -354,9 +430,10 @@ def dbus_type_to_qt_type(dbus_sig: str) -> str | None:
     if dbus_sig in basic_types:
         return None
     
-    # Check for Kapsule library types first
-    if dbus_sig in KAPSULE_TYPE_MAP:
-        return KAPSULE_TYPE_MAP[dbus_sig]
+    # Check for library types with explicit CppType metadata
+    cpp_type = get_cpp_type_for_signature(dbus_sig)
+    if cpp_type:
+        return cpp_type
     
     # Generate the C++ type
     cpp_type = dbus_sig_to_cpp_type(dbus_sig)
@@ -365,6 +442,23 @@ def dbus_type_to_qt_type(dbus_sig: str) -> str | None:
     
     return cpp_type
 
+def initialize_type_aliases(daemon_path: Path) -> None:
+    """Initialize TYPE_ALIASES by parsing dbus_types.py.
+    
+    Args:
+        daemon_path: Path to the daemon directory containing dbus_types.py
+    """
+    global TYPE_ALIASES
+    
+    # Start with builtins
+    TYPE_ALIASES = dict(BUILTIN_TYPE_ALIASES)
+    
+    # Parse dbus_types.py for additional types
+    dbus_types_path = daemon_path / "dbus_types.py"
+    if dbus_types_path.exists():
+        parsed = parse_dbus_types(dbus_types_path)
+        TYPE_ALIASES.update(parsed)
+
 
 def generate_introspection_xml(service_path: Path) -> str:
     """Generate D-Bus introspection XML for Qt.
@@ -372,6 +466,9 @@ def generate_introspection_xml(service_path: Path) -> str:
     Args:
         service_path: Path to service.py
     """
+    # Initialize type aliases from dbus_types.py
+    initialize_type_aliases(service_path.parent)
+    
     methods, signals, properties = parse_service_interface(service_path)
     
     lines = [

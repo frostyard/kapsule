@@ -38,6 +38,26 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 # =============================================================================
+# C++ Type Metadata
+# =============================================================================
+
+class CppType:
+    """Marker class for specifying the corresponding C++ type name.
+    
+    Use as additional metadata in Annotated types to specify what C++ type
+    should be used in the D-Bus introspection XML annotations.
+    
+    Example:
+        DBusContainer = Annotated[tuple[str, str, str, str, str], "(sssss)", CppType("Kapsule::Container")]
+    """
+    def __init__(self, cpp_type: str) -> None:
+        self.cpp_type = cpp_type
+    
+    def __repr__(self) -> str:
+        return f"CppType({self.cpp_type!r})"
+
+
+# =============================================================================
 # Primitive D-Bus Type Aliases
 # =============================================================================
 
@@ -95,6 +115,28 @@ DBusStrArray = Annotated[list[str], "as"]
 
 DBusStrDict = Annotated[dict[str, str], "a{ss}"]
 """D-Bus dictionary string->string (signature: a{ss})"""
+
+
+# =============================================================================
+# Kapsule Composite Types
+# =============================================================================
+# These types map to custom C++ classes in libkapsule-qt that have proper
+# QDBusArgument streaming operators defined.
+
+DBusContainer = Annotated[
+    tuple[str, str, str, str, str], "(sssss)", CppType("Kapsule::Container")
+]
+"""Container info tuple: (name, status, image, created, mode)"""
+
+DBusContainerList = Annotated[
+    list[tuple[str, str, str, str, str]], "a(sssss)", CppType("QList<Kapsule::Container>")
+]
+"""List of container info tuples"""
+
+DBusEnterResult = Annotated[
+    tuple[bool, str, list[str]], "(bsas)", CppType("Kapsule::EnterResult")
+]
+"""PrepareEnter result: (success, error_message, command_array)"""
 
 
 # =============================================================================
@@ -207,6 +249,12 @@ __all__ = [
     # Container types
     "DBusStrArray",
     "DBusStrDict",
+    # Kapsule composite types
+    "DBusContainer",
+    "DBusContainerList",
+    "DBusEnterResult",
+    # Metadata
+    "CppType",
     # Decorators
     "dbus_property",
     "method",
