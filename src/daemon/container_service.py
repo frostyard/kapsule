@@ -76,7 +76,7 @@ class ContainerService:
 
     @operation(
         "create",
-        description=lambda name, **_: f"Creating container: {name}",
+        description="Creating container: {name}",
         target_param="name",
     )
     async def create_container(
@@ -155,7 +155,7 @@ class ContainerService:
 
     @operation(
         "delete",
-        description=lambda name, **_: f"Removing container: {name}",
+        description="Removing container: {name}",
         target_param="name",
     )
     async def delete_container(
@@ -204,7 +204,7 @@ class ContainerService:
 
     @operation(
         "start",
-        description=lambda name, **_: f"Starting container: {name}",
+        description="Starting container: {name}",
         target_param="name",
     )
     async def start_container(
@@ -239,7 +239,7 @@ class ContainerService:
 
     @operation(
         "stop",
-        description=lambda name, **_: f"Stopping container: {name}",
+        description="Stopping container: {name}",
         target_param="name",
     )
     async def stop_container(
@@ -280,7 +280,7 @@ class ContainerService:
 
     @operation(
         "setup_user",
-        description=lambda container_name, username, **_: f"Setting up user '{username}' in {container_name}",
+        description="Setting up user '{username}' in {container_name}",
         target_param="container_name",
     )
     async def setup_user(
@@ -413,7 +413,7 @@ class ContainerService:
             List of (name, status, image, created, kapsule_mode) tuples
         """
         containers = await self._incus.list_containers()
-        result = []
+        result: list[tuple[str, str, str, str, str]] = []
         for c in containers:
             # Get kapsule mode from instance config
             try:
@@ -461,7 +461,7 @@ class ContainerService:
             instance.name or name,
             instance.status or "Unknown",
             image,
-            instance.created or "",
+            instance.created_at.isoformat() if instance.created_at else "",
             mode,
         )
 

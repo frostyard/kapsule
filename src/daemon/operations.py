@@ -258,7 +258,7 @@ class OperationTracker:
 
 def operation(
     operation_type: str,
-    description: str | Callable[..., str],
+    description: str,
     target_param: str = "name",
 ) -> Callable[
     [Callable[Concatenate[Any, OperationReporter, P], Awaitable[None]]],
@@ -276,11 +276,11 @@ def operation(
 
     Args:
         operation_type: Type identifier (e.g., "create", "delete", "start")
-        description: Static string or callable that takes **kwargs and returns description
+        description: Template string with {param} placeholders for kwargs
         target_param: Name of the parameter that represents the target (for signals)
 
     Example:
-        @operation("create", lambda name, image, **_: f"Creating container: {name}")
+        @operation("create", "Creating container: {name}")
         async def create_container(
             self,
             progress: OperationReporter,  # Auto-injected
@@ -299,11 +299,8 @@ def operation(
             # Generate operation ID
             op_id = str(uuid.uuid4())
 
-            # Build description
-            if callable(description):
-                desc = description(**kwargs)
-            else:
-                desc = description
+            # Build description from template
+            desc = description.format(**kwargs)
 
             # Get target from kwargs
             target = str(kwargs.get(target_param, ""))
