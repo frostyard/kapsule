@@ -69,6 +69,8 @@ QCoro::Task<OperationResult> KapsuleClientPrivate::waitForOperation(
     const QString &objectPath,
     ProgressHandler progress)
 {
+    qCDebug(KAPSULE_LOG) << "Waiting for operation at" << objectPath;
+    
     // Create a proxy for this specific operation
     auto opProxy = std::make_unique<OrgKdeKapsuleOperationInterface>(
         QStringLiteral("org.kde.kapsule"),
@@ -77,8 +79,11 @@ QCoro::Task<OperationResult> KapsuleClientPrivate::waitForOperation(
     );
 
     if (!opProxy->isValid()) {
+        qCWarning(KAPSULE_LOG) << "Operation proxy is invalid:" << opProxy->lastError().message();
         co_return OperationResult{false, QStringLiteral("Failed to connect to operation object")};
     }
+
+    qCDebug(KAPSULE_LOG) << "Operation proxy created successfully";
 
     // Subscribe to progress messages if handler provided
     QMetaObject::Connection messageConn;
@@ -87,14 +92,19 @@ QCoro::Task<OperationResult> KapsuleClientPrivate::waitForOperation(
             opProxy.get(),
             &OrgKdeKapsuleOperationInterface::Message,
             [progress](int type, const QString &msg, int indent) {
+                qCDebug(KAPSULE_LOG) << "Got Message signal:" << type << msg;
                 progress(static_cast<MessageType>(type), msg, indent);
             });
+        qCDebug(KAPSULE_LOG) << "Subscribed to Message signal";
     }
 
+    qCDebug(KAPSULE_LOG) << "Waiting for Completed signal...";
     // Await the Completed signal directly using qCoro - no polling!
     auto [success, error] = co_await qCoro(
         opProxy.get(),
         &OrgKdeKapsuleOperationInterface::Completed);
+
+    qCDebug(KAPSULE_LOG) << "Got Completed signal: success=" << success << "error=" << error;
 
     // Clean up
     if (progress) {

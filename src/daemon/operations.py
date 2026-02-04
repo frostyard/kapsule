@@ -254,7 +254,9 @@ class OperationInterface(ServiceInterface):
         self._status = "completed" if success else "failed"
         if self._cancel_requested and not success:
             self._status = "cancelled"
-        self.Completed(success, message)
+        print(f"[Operation {self._op_id}] Emitting Completed signal: success={success}, message={message!r}")
+        result = self.Completed(success, message)
+        print(f"[Operation {self._op_id}] Signal emitted, result={result}")
 
 
 # =============================================================================
@@ -467,13 +469,16 @@ class OperationTracker:
 
     def set_bus(self, bus: MessageBus) -> None:
         """Set the message bus for exporting operation objects."""
+        print(f"[OperationTracker] set_bus called with bus={bus}")
         self._bus = bus
 
     def add(self, op: RunningOperation) -> None:
         """Register a running operation and export it to D-Bus."""
         self._operations[op.id] = op
         if self._bus:
+            print(f"[OperationTracker] Exporting operation {op.id} to {op.interface.object_path}")
             self._bus.export(op.interface.object_path, op.interface)
+            print(f"[OperationTracker] Export complete for {op.id}")
 
     def remove(self, op_id: str) -> None:
         """Remove a completed operation from tracking.
@@ -576,31 +581,45 @@ def operation(
 
             # Run the operation in a task so we return the path immediately
             async def run_operation() -> None:
+                # Small delay to allow client to subscribe to signals before we start
+                print(f"[Operation {op_id}] Waiting for client to subscribe...")
+                await asyncio.sleep(0.1)
+                print(f"[Operation {op_id}] Starting execution of {operation_type}")
                 try:
                     await func(self, reporter, *args, **kwargs)
+                    print(f"[Operation {op_id}] Completed successfully")
                     op_interface.mark_completed(True, "")
                 except asyncio.CancelledError:
                     # Operation was cancelled
+                    print(f"[Operation {op_id}] Cancelled")
                     op_interface.mark_completed(False, "Operation cancelled")
                 except OperationError as e:
                     # Expected errors - user-friendly message
+                    print(f"[Operation {op_id}] OperationError: {e}")
                     op_interface.mark_completed(False, str(e))
                 except Exception as e:
                     # Unexpected errors - log and report
                     import traceback
 
+                    print(f"[Operation {op_id}] Exception: {e}")
                     traceback.print_exc()
                     op_interface.mark_completed(False, f"Internal error: {e}")
                 finally:
                     # Remove from tracker after completion
                     if hasattr(self, "_tracker"):
+                        print(f"[Operation {op_id}] Removing from tracker")
                         self._tracker.remove(op_id)
 
-            task = asyncio.create_task(run_operation(), name=f"op-{operation_type}-{op_id[:8]}")
-            op_interface.set_task(task)
-
-            # Track the operation and export to D-Bus
+            # IMPORTANT: Export the operation to D-Bus BEFORE starting the task
+            # to avoid race conditions where clients can't connect to the operation
+            # or miss signals emitted early in execution
             if hasattr(self, "_tracker"):
+                # Create the task but don't start it yet (just create the Task object)
+                task = asyncio.create_task(run_operation(), name=f"op-{operation_type}-{op_id[:8]}")
+                op_interface.set_task(task)
+                
+                print(f"[Operation {op_id}] Created task, adding to tracker")
+                # Export to D-Bus before the task starts running
                 self._tracker.add(
                     RunningOperation(
                         id=op_id,
@@ -610,8 +629,14 @@ def operation(
                         interface=op_interface,
                     )
                 )
+                print(f"[Operation {op_id}] Added to tracker")
+            else:
+                # No tracker - just create the task
+                task = asyncio.create_task(run_operation(), name=f"op-{operation_type}-{op_id[:8]}")
+                op_interface.set_task(task)
 
             # Return the D-Bus object path
+            print(f"[Operation {op_id}] Returning path: {op_interface.object_path}")
             return op_interface.object_path
 
         return wrapper

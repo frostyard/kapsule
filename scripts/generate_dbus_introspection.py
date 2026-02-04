@@ -331,7 +331,7 @@ def dbus_sig_to_cpp_type(sig: str) -> str:
     if sig.startswith("(") and sig.endswith(")"):
         inner = sig[1:-1]
         # Parse the inner types
-        types = []
+        types: list[str] = []
         i = 0
         while i < len(inner):
             c = inner[i]
