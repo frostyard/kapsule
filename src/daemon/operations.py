@@ -19,7 +19,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import (
-    TYPE_CHECKING,
     Annotated,
     Any,
     AsyncIterator,
@@ -36,15 +35,11 @@ from dbus_fast.aio import MessageBus
 from .dbus_types import (
     DBusStr,
     DBusBool,
-    DBusObjectPath,
     dbus_property,
     method,
     signal,
     PropertyAccess,
 )
-
-if TYPE_CHECKING:
-    from .service import KapsuleManagerInterface
 
 
 P = ParamSpec("P")
@@ -317,7 +312,7 @@ class OperationReporter:
     @property
     def operation_id(self) -> str:
         """Get the operation ID."""
-        return self._operation._op_id
+        return self._operation.Id
 
     def is_cancelled(self) -> bool:
         """Check if the operation has been cancelled.
@@ -358,8 +353,6 @@ class OperationReporter:
             indent if indent is not None else self._indent,
         )
 
-    def dim(self, message: str, indent: int | None = None) -> None:
-        """Emit a dimmed/secondary message."""
     def dim(self, message: str, indent: int | None = None) -> None:
         """Emit a dimmed/secondary message."""
         self._operation.Message(
@@ -459,11 +452,16 @@ class RunningOperation:
     interface: OperationInterface
 
 
+def _make_operations_dict() -> dict[str, RunningOperation]:
+    """Factory for operations dict with explicit type."""
+    return {}
+
+
 @dataclass
 class OperationTracker:
     """Tracks all running operations in the daemon."""
 
-    _operations: dict[str, RunningOperation] = field(default_factory=dict)
+    _operations: dict[str, RunningOperation] = field(default_factory=_make_operations_dict)
     _bus: MessageBus | None = None
     _cleanup_delay: float = 5.0  # Seconds to keep completed operations
 
