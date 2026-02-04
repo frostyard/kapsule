@@ -313,12 +313,6 @@ if(BUILD_KDE_COMPONENTS)
         PURPOSE "Required for KIO worker"
     )
 
-    find_package(Plasma ${REQUIRED_KF_VERSION})
-    set_package_properties(Plasma PROPERTIES
-        TYPE OPTIONAL
-        PURPOSE "Required for Plasma widget"
-    )
-
     find_package(KF6KCMUtils ${REQUIRED_KF_VERSION})
     set_package_properties(KF6KCMUtils PROPERTIES
         TYPE OPTIONAL
@@ -333,10 +327,6 @@ if(BUILD_KDE_COMPONENTS)
 
     if(KF6KIO_FOUND)
         # add_subdirectory(src/kio)  # TODO: Enable when KIO worker is implemented
-    endif()
-
-    if(Plasma_FOUND)
-        # add_subdirectory(src/plasmoid)  # TODO: Enable when plasmoid is implemented
     endif()
 
     if(KF6KCMUtils_FOUND)
