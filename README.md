@@ -7,8 +7,8 @@ A distrobox-like tool using Incus as the container/VM backend, designed for KDE 
 ## Features
 
 - **Nested containerization** - Create containers that can run Docker/Podman inside them
-- **Host integration** - Containers share your home directory, user account, environment, Wayland/PipeWire sockets, and DBUS session.
-- **KDE/Plasma integration** - Widget, KIO worker, System Settings module (planned)
+- **Host integration** - Containers share your home directory, user account, environment, Wayland/PipeWire sockets, and D-Bus session
+- **KDE/Plasma integration** - Konsole integration, KIO worker, System Settings module (planned)
 
 ## Quick Start
 
@@ -113,22 +113,15 @@ On first `enter`, Kapsule automatically:
 - Mounts your home directory
 - Sets up XDG_RUNTIME_DIR symlink for Wayland/PipeWire
 
-## Project Structure
+## Architecture
 
-```
-kapsule/
-├── pyproject.toml           # Python package definition
-├── src/
-│   ├── cli/                 # CLI application (kapsule command)
-│   │   ├── main.py          # Command definitions
-│   │   ├── incus_client.py  # Async Incus REST API client
-│   │   └── profile.py       # Kapsule container profile
-│   ├── daemon/              # D-Bus service for KDE integration
-│   └── libkapsule-qt/       # Qt/KDE wrapper library
-└── data/
-    ├── dbus/                # D-Bus service configuration
-    └── systemd/             # Systemd units and drop-ins
-```
+Kapsule consists of:
+
+- **kapsule CLI** (C++) - User-facing command-line tool
+- **libkapsule-qt** (C++) - Qt library for D-Bus communication
+- **kapsule-daemon** (Python) - System service bridging D-Bus and Incus REST API
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed technical documentation.
 
 ## Requirements
 
