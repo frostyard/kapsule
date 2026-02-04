@@ -8,6 +8,9 @@ add_executable(kapsule
     output.cpp
 )
 
+# QCoro's waitFor() uses exceptions internally, so we need to enable them
+kde_target_enable_exceptions(kapsule PRIVATE)
+
 target_include_directories(kapsule
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

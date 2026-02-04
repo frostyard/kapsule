@@ -47,6 +47,9 @@ set(kapsule_HEADERS
 add_library(KapsuleQt ${kapsule_SRCS})
 add_library(Kapsule::KapsuleQt ALIAS KapsuleQt)
 
+# QCoro uses exceptions internally, so we need to enable them
+kde_target_enable_exceptions(KapsuleQt PRIVATE)
+
 # Ensure D-Bus introspection XML is generated before building
 add_dependencies(KapsuleQt generate_dbus_xml)
 
