@@ -4,7 +4,7 @@ Provides decorators and utilities for daemon operations that emit
 progress signals over D-Bus.
 
 Each operation is exposed as a separate D-Bus object at
-/org/kde/kapsule/operations/{uuid}. This allows clients to:
+/org/kde/kapsule/operations/{id}. This allows clients to:
 - Subscribe to signals for only the operations they care about
 - Avoid race conditions by getting the object path before work starts
 - Cancel operations via a method call
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import uuid
+import itertools
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -49,6 +49,9 @@ if TYPE_CHECKING:
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+# Global counter for operation IDs (simpler than UUIDs, easier to debug)
+_operation_counter = itertools.count(1)
 
 
 class MessageType(IntEnum):
@@ -388,7 +391,7 @@ class OperationReporter:
             total: Total units, or -1 for indeterminate
             indent: Indent level for display
         """
-        progress_id = str(uuid.uuid4())
+        progress_id = str(next(_operation_counter))
         self._operation.ProgressStarted(
             progress_id,
             description,
@@ -548,7 +551,7 @@ def operation(
             ...
 
     Returns:
-        The D-Bus object path: /org/kde/kapsule/operations/{uuid}
+        The D-Bus object path: /org/kde/kapsule/operations/{id}
     """
 
     def decorator(
@@ -556,8 +559,8 @@ def operation(
     ) -> Callable[Concatenate[Any, P], Awaitable[str]]:
         @functools.wraps(func)
         async def wrapper(self: Any, *args: P.args, **kwargs: P.kwargs) -> str:
-            # Generate operation ID
-            op_id = str(uuid.uuid4())
+            # Generate operation ID using incrementing counter
+            op_id = str(next(_operation_counter))
 
             # Build description from template
             desc = description.format(**kwargs)
