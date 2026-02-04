@@ -29,17 +29,10 @@ from typing import (
     TypeVar,
 )
 
-from dbus_fast.service import ServiceInterface
+from dbus_fast.service import ServiceInterface, dbus_property, dbus_method, dbus_signal
+from dbus_fast.constants import PropertyAccess
+from dbus_fast.annotations import DBusStr, DBusBool, DBusSignature
 from dbus_fast.aio import MessageBus
-
-from .dbus_types import (
-    DBusStr,
-    DBusBool,
-    dbus_property,
-    method,
-    signal,
-    PropertyAccess,
-)
 
 
 P = ParamSpec("P")
@@ -139,13 +132,13 @@ class OperationInterface(ServiceInterface):
     # Signals
     # -------------------------------------------------------------------------
 
-    @signal()
+    @dbus_signal()
     def Message(
         self,
         message_type: int,
         message: DBusStr,
         indent_level: int,
-    ) -> Annotated[list[int | str], "isi"]:
+    ) -> Annotated[tuple[int, str, int], DBusSignature("isi")]:
         """Emitted for progress messages.
 
         Args:
@@ -153,16 +146,16 @@ class OperationInterface(ServiceInterface):
             message: The message text
             indent_level: Indentation level for hierarchical display
         """
-        return [message_type, message, indent_level]
+        return (message_type, message, indent_level)
 
-    @signal()
+    @dbus_signal()
     def ProgressStarted(
         self,
         progress_id: DBusStr,
         description: DBusStr,
         total: int,
         indent_level: int,
-    ) -> Annotated[list[str | int], "ssii"]:
+    ) -> Annotated[tuple[str, str, int, int], DBusSignature("ssii")]:
         """Emitted when a progress bar starts.
 
         Args:
@@ -171,15 +164,15 @@ class OperationInterface(ServiceInterface):
             total: Total units (-1 for indeterminate)
             indent_level: Indentation level
         """
-        return [progress_id, description, total, indent_level]
+        return (progress_id, description, total, indent_level)
 
-    @signal()
+    @dbus_signal()
     def ProgressUpdate(
         self,
         progress_id: DBusStr,
         current: int,
         rate: float,
-    ) -> Annotated[list[str | int | float], "sid"]:
+    ) -> Annotated[tuple[str, int, float], DBusSignature("sid")]:
         """Emitted to update a progress bar.
 
         Args:
@@ -187,15 +180,15 @@ class OperationInterface(ServiceInterface):
             current: Current progress value
             rate: Rate of progress (for ETA calculation)
         """
-        return [progress_id, current, rate]
+        return (progress_id, current, rate)
 
-    @signal()
+    @dbus_signal()
     def ProgressCompleted(
         self,
         progress_id: DBusStr,
         success: DBusBool,
         message: DBusStr,
-    ) -> Annotated[list[str | bool], "sbs"]:
+    ) -> Annotated[tuple[str, bool, str], DBusSignature("sbs")]:
         """Emitted when a progress bar completes.
 
         Args:
@@ -203,27 +196,27 @@ class OperationInterface(ServiceInterface):
             success: Whether it succeeded
             message: Optional completion message (replaces bar)
         """
-        return [progress_id, success, message]
+        return (progress_id, success, message)
 
-    @signal()
+    @dbus_signal()
     def Completed(
         self,
         success: DBusBool,
         message: DBusStr,
-    ) -> Annotated[list[bool | str], "bs"]:
+    ) -> Annotated[tuple[bool, str], DBusSignature("bs")]:
         """Emitted when this operation finishes.
 
         Args:
             success: Whether the operation succeeded
             message: Error message if failed, empty if succeeded
         """
-        return [success, message]
+        return (success, message)
 
     # -------------------------------------------------------------------------
     # Methods
     # -------------------------------------------------------------------------
 
-    @method()
+    @dbus_method()
     def Cancel(self) -> DBusBool:
         """Request cancellation of this operation.
 

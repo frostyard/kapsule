@@ -105,7 +105,11 @@ def parse_dbus_types(dbus_types_path: Path) -> dict[str, TypeAliasInfo]:
 
 
 def extract_type_alias_info(value: ast.expr) -> TypeAliasInfo | None:
-    """Extract TypeAliasInfo from an Annotated type expression."""
+    """Extract TypeAliasInfo from an Annotated type expression.
+    
+    Handles both old style: Annotated[type, "signature", CppType("...")]
+    And new style: Annotated[type, DBusSignature("signature"), CppType("...")]
+    """
     if not isinstance(value, ast.Subscript):
         return None
     
@@ -120,12 +124,22 @@ def extract_type_alias_info(value: ast.expr) -> TypeAliasInfo | None:
     if len(elts) < 2:
         return None
     
-    # Second element should be the D-Bus signature string
+    # Second element should be the D-Bus signature
     sig_elt = elts[1]
-    if not (isinstance(sig_elt, ast.Constant) and isinstance(sig_elt.value, str)):
+    dbus_sig = None
+    
+    # Old style: bare string
+    if isinstance(sig_elt, ast.Constant) and isinstance(sig_elt.value, str):
+        dbus_sig = sig_elt.value
+    # New style: DBusSignature("sig")
+    elif isinstance(sig_elt, ast.Call):
+        if isinstance(sig_elt.func, ast.Name) and sig_elt.func.id == "DBusSignature":
+            if sig_elt.args and isinstance(sig_elt.args[0], ast.Constant):
+                dbus_sig = sig_elt.args[0].value
+    
+    if dbus_sig is None:
         return None
     
-    dbus_sig = sig_elt.value
     cpp_type = None
     
     # Look for CppType("...") in remaining elements
@@ -139,17 +153,27 @@ def extract_type_alias_info(value: ast.expr) -> TypeAliasInfo | None:
 
 
 def extract_annotated_signature(annotation: ast.expr) -> str | None:
-    """Extract D-Bus signature from an Annotated[...] type expression."""
+    """Extract D-Bus signature from an Annotated[...] type expression.
+    
+    Handles both old style: Annotated[type, "signature"]
+    And new style: Annotated[type, DBusSignature("signature")]
+    """
     if isinstance(annotation, ast.Subscript):
-        # Check if it's Annotated[type, "signature"]
+        # Check if it's Annotated[type, "signature"] or Annotated[type, DBusSignature("sig")]
         if isinstance(annotation.value, ast.Name) and annotation.value.id == "Annotated":
             if isinstance(annotation.slice, ast.Tuple):
                 elts = annotation.slice.elts
                 if len(elts) >= 2:
-                    # The second element should be the signature string
+                    # The second element should be the signature
                     sig_elt = elts[1]
+                    # Old style: bare string
                     if isinstance(sig_elt, ast.Constant) and isinstance(sig_elt.value, str):
                         return sig_elt.value
+                    # New style: DBusSignature("sig")
+                    if isinstance(sig_elt, ast.Call):
+                        if isinstance(sig_elt.func, ast.Name) and sig_elt.func.id == "DBusSignature":
+                            if sig_elt.args and isinstance(sig_elt.args[0], ast.Constant):
+                                return sig_elt.args[0].value
     return None
 
 
@@ -248,7 +272,7 @@ def parse_service_interface(
                     # Get docstring
                     doc = ast.get_docstring(item)
                     
-                    if "method" in decorator_names:
+                    if "method" in decorator_names or "dbus_method" in decorator_names:
                         # Extract method info
                         args: list[tuple[str, str]] = []
                         for arg in item.args.args[1:]:  # Skip self
@@ -267,7 +291,7 @@ def parse_service_interface(
                             doc=doc,
                         ))
                     
-                    elif "signal" in decorator_names:
+                    elif "signal" in decorator_names or "dbus_signal" in decorator_names:
                         # Extract signal info - signals use return annotation for signature
                         args: list[tuple[str, str]] = []
                         for arg in item.args.args[1:]:  # Skip self

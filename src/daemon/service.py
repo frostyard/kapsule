@@ -9,23 +9,17 @@ import contextvars
 from typing import Annotated
 
 from dbus_fast.aio import MessageBus
-from dbus_fast.service import ServiceInterface
+from dbus_fast.service import ServiceInterface, dbus_property, dbus_method, dbus_signal
+from dbus_fast.constants import PropertyAccess
+from dbus_fast.annotations import DBusStr, DBusBool, DBusObjectPath, DBusSignature, DBusUInt32
 from dbus_fast import BusType, Message, MessageType
 
 from .dbus_types import (
-    DBusStr,
-    DBusBool,
-    DBusUInt32,
-    DBusObjectPath,
     DBusStrArray,
     DBusStrDict,
     DBusContainer,
     DBusContainerList,
     DBusEnterResult,
-    dbus_property,
-    method,
-    signal,
-    PropertyAccess,
 )
 
 from . import __version__
@@ -182,13 +176,13 @@ class KapsuleManagerInterface(ServiceInterface):
     # are for tools that want to monitor all operations without subscribing
     # to each one.
 
-    @signal()
+    @dbus_signal()
     def OperationCreated(
         self,
         object_path: DBusObjectPath,
         operation_type: DBusStr,
         target: DBusStr,
-    ) -> Annotated[list[str], "oss"]:
+    ) -> Annotated[tuple[str, str, str], DBusSignature("oss")]:
         """Emitted when a new operation is created.
 
         Clients can use the object_path to subscribe to the operation's
@@ -199,28 +193,28 @@ class KapsuleManagerInterface(ServiceInterface):
             operation_type: Type of operation (create, delete, start, stop, setup_user)
             target: Target of the operation (usually container name)
         """
-        return [object_path, operation_type, target]
+        return (object_path, operation_type, target)
 
-    @signal()
+    @dbus_signal()
     def OperationRemoved(
         self,
         object_path: DBusObjectPath,
         success: DBusBool,
-    ) -> Annotated[list[str | bool], "ob"]:
+    ) -> Annotated[tuple[str, bool], DBusSignature("ob")]:
         """Emitted when an operation is removed (after completion + cleanup delay).
 
         Args:
             object_path: D-Bus path to the operation that was removed
             success: Whether the operation succeeded
         """
-        return [object_path, success]
+        return (object_path, success)
 
     # =========================================================================
     # Methods - Operations Query
     # =========================================================================
 
-    @method()
-    def ListOperations(self) -> Annotated[list[str], "ao"]:
+    @dbus_method()
+    def ListOperations(self) -> Annotated[list[str], DBusSignature("ao")]:
         """List all currently running operations.
 
         Returns:
@@ -232,7 +226,7 @@ class KapsuleManagerInterface(ServiceInterface):
     # Methods - Container Lifecycle
     # =========================================================================
 
-    @method()
+    @dbus_method()
     async def CreateContainer(
         self,
         name: DBusStr,
@@ -274,7 +268,7 @@ class KapsuleManagerInterface(ServiceInterface):
             dbus_mux=dbus_mux,
         )
 
-    @method()
+    @dbus_method()
     async def DeleteContainer(self, name: DBusStr, force: DBusBool) -> DBusObjectPath:
         """Delete a container.
 
@@ -287,7 +281,7 @@ class KapsuleManagerInterface(ServiceInterface):
         """
         return await self._service.delete_container(name=name, force=force)
 
-    @method()
+    @dbus_method()
     async def StartContainer(self, name: DBusStr) -> DBusObjectPath:
         """Start a stopped container.
 
@@ -299,7 +293,7 @@ class KapsuleManagerInterface(ServiceInterface):
         """
         return await self._service.start_container(name=name)
 
-    @method()
+    @dbus_method()
     async def StopContainer(self, name: DBusStr, force: DBusBool) -> DBusObjectPath:
         """Stop a running container.
 
@@ -316,7 +310,7 @@ class KapsuleManagerInterface(ServiceInterface):
     # Methods - User Setup
     # =========================================================================
 
-    @method()
+    @dbus_method()
     async def SetupUser(
         self,
         container_name: DBusStr,
@@ -348,7 +342,7 @@ class KapsuleManagerInterface(ServiceInterface):
             home_dir=home_dir,
         )
 
-    @method()
+    @dbus_method()
     async def IsUserSetup(self, container_name: DBusStr, uid: DBusUInt32) -> DBusBool:
         """Check if a user is set up in a container.
 
@@ -365,7 +359,7 @@ class KapsuleManagerInterface(ServiceInterface):
     # Methods - Query
     # =========================================================================
 
-    @method()
+    @dbus_method()
     async def ListContainers(self) -> DBusContainerList:
         """List all containers.
 
@@ -374,7 +368,7 @@ class KapsuleManagerInterface(ServiceInterface):
         """
         return await self._service.list_containers()
 
-    @method()
+    @dbus_method()
     async def GetContainerInfo(self, name: DBusStr) -> DBusContainer:
         """Get information about a container.
 
@@ -386,7 +380,7 @@ class KapsuleManagerInterface(ServiceInterface):
         """
         return await self._service.get_container_info(name)
 
-    @method()
+    @dbus_method()
     async def GetConfig(self) -> DBusStrDict:
         """Get user configuration.
 
@@ -412,7 +406,7 @@ class KapsuleManagerInterface(ServiceInterface):
     # Methods - Enter Container
     # =========================================================================
 
-    @method()
+    @dbus_method()
     async def PrepareEnter(
         self,
         container_name: DBusStr,
