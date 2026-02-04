@@ -6,13 +6,15 @@
 #include "kapsuleclient.h"
 #include "kapsule_debug.h"
 #include "kapsulemanagerinterface.h"
+#include "kapsuleoperationinterface.h"
 #include "types.h"
 
 #include <QDBusConnection>
+#include <QDBusObjectPath>
 #include <QDBusPendingReply>
 
 #include <qcoro/qcorodbuspendingreply.h>
-#include <qcoro/qcorotimer.h>
+#include <qcoro/qcorosignal.h>
 
 namespace Kapsule {
 
@@ -26,8 +28,9 @@ public:
     explicit KapsuleClientPrivate(KapsuleClient *q);
 
     void connectToDaemon();
-    void subscribeToSignals();
-    QCoro::Task<OperationResult> waitForOperation(const QString &opId, ProgressHandler progress);
+    QCoro::Task<OperationResult> waitForOperation(
+        const QString &objectPath,
+        ProgressHandler progress);
 
     KapsuleClient *q_ptr;
     std::unique_ptr<OrgKdeKapsuleManagerInterface> interface;
@@ -55,7 +58,6 @@ void KapsuleClientPrivate::connectToDaemon()
         connected = true;
         daemonVersion = interface->version();
         qCDebug(KAPSULE_LOG) << "Connected to kapsule-daemon version" << daemonVersion;
-        subscribeToSignals();
     } else {
         qCWarning(KAPSULE_LOG) << "Failed to connect to kapsule-daemon:"
                                << interface->lastError().message();
@@ -63,60 +65,43 @@ void KapsuleClientPrivate::connectToDaemon()
     }
 }
 
-void KapsuleClientPrivate::subscribeToSignals()
-{
-    // We subscribe to signals per-operation in waitForOperation()
-}
-
 QCoro::Task<OperationResult> KapsuleClientPrivate::waitForOperation(
-    const QString &opId,
+    const QString &objectPath,
     ProgressHandler progress)
 {
-    struct OpState {
-        bool completed = false;
-        bool success = false;
-        QString error;
-    };
-    auto state = std::make_shared<OpState>();
+    // Create a proxy for this specific operation
+    auto opProxy = std::make_unique<OrgKdeKapsuleOperationInterface>(
+        QStringLiteral("org.kde.kapsule"),
+        objectPath,
+        QDBusConnection::systemBus()
+    );
 
-    // Connect to signals for this operation
-    QMetaObject::Connection completedConn;
+    if (!opProxy->isValid()) {
+        co_return OperationResult{false, QStringLiteral("Failed to connect to operation object")};
+    }
+
+    // Subscribe to progress messages if handler provided
     QMetaObject::Connection messageConn;
-
-    completedConn = QObject::connect(
-        interface.get(),
-        &OrgKdeKapsuleManagerInterface::OperationCompleted,
-        [state, opId](const QString &id, bool ok, const QString &msg) {
-            if (id == opId) {
-                state->completed = true;
-                state->success = ok;
-                state->error = msg;
-            }
-        });
-
     if (progress) {
         messageConn = QObject::connect(
-            interface.get(),
-            &OrgKdeKapsuleManagerInterface::OperationMessage,
-            [progress, opId](const QString &id, int type, const QString &msg, int indent) {
-                if (id == opId) {
-                    progress(static_cast<MessageType>(type), msg, indent);
-                }
+            opProxy.get(),
+            &OrgKdeKapsuleOperationInterface::Message,
+            [progress](int type, const QString &msg, int indent) {
+                progress(static_cast<MessageType>(type), msg, indent);
             });
     }
 
-    // Poll until completed (QCoro doesn't have a TaskCompletionSource equivalent yet)
-    // This is a simple approach; could be improved with proper signal-to-coroutine
-    while (!state->completed) {
-        co_await QCoro::sleepFor(std::chrono::milliseconds(50));
-    }
+    // Await the Completed signal directly using qCoro - no polling!
+    auto [success, error] = co_await qCoro(
+        opProxy.get(),
+        &OrgKdeKapsuleOperationInterface::Completed);
 
-    QObject::disconnect(completedConn);
+    // Clean up
     if (progress) {
         QObject::disconnect(messageConn);
     }
 
-    co_return OperationResult{state->success, state->error};
+    co_return OperationResult{success, error};
 }
 
 // ============================================================================
@@ -210,9 +195,9 @@ QCoro::Task<OperationResult> KapsuleClient::createContainer(
         co_return {false, reply.error().message()};
     }
 
-    // The reply is the operation ID - wait for completion
-    QString opId = reply.value();
-    co_return co_await d->waitForOperation(opId, progress);
+    // The reply is the D-Bus object path for the operation - wait for completion
+    QDBusObjectPath opPath = reply.value();
+    co_return co_await d->waitForOperation(opPath.path(), progress);
 }
 
 QCoro::Task<OperationResult> KapsuleClient::deleteContainer(
@@ -229,8 +214,8 @@ QCoro::Task<OperationResult> KapsuleClient::deleteContainer(
         co_return {false, reply.error().message()};
     }
 
-    QString opId = reply.value();
-    co_return co_await d->waitForOperation(opId, progress);
+    QDBusObjectPath opPath = reply.value();
+    co_return co_await d->waitForOperation(opPath.path(), progress);
 }
 
 QCoro::Task<OperationResult> KapsuleClient::startContainer(
@@ -246,8 +231,8 @@ QCoro::Task<OperationResult> KapsuleClient::startContainer(
         co_return {false, reply.error().message()};
     }
 
-    QString opId = reply.value();
-    co_return co_await d->waitForOperation(opId, progress);
+    QDBusObjectPath opPath = reply.value();
+    co_return co_await d->waitForOperation(opPath.path(), progress);
 }
 
 QCoro::Task<OperationResult> KapsuleClient::stopContainer(
@@ -264,8 +249,8 @@ QCoro::Task<OperationResult> KapsuleClient::stopContainer(
         co_return {false, reply.error().message()};
     }
 
-    QString opId = reply.value();
-    co_return co_await d->waitForOperation(opId, progress);
+    QDBusObjectPath opPath = reply.value();
+    co_return co_await d->waitForOperation(opPath.path(), progress);
 }
 
 QCoro::Task<EnterResult> KapsuleClient::prepareEnter(

@@ -16,6 +16,7 @@ from .dbus_types import (
     DBusStr,
     DBusBool,
     DBusUInt32,
+    DBusObjectPath,
     DBusStrArray,
     DBusStrDict,
     DBusContainer,
@@ -174,112 +175,58 @@ class KapsuleManagerInterface(ServiceInterface):
         return self._version
 
     # =========================================================================
-    # Signals for Operation Progress
+    # Signals for Operation Lifecycle (for monitoring tools)
     # =========================================================================
+    # Note: Detailed progress signals are emitted on individual operation
+    # objects at /org/kde/kapsule/operations/{id}. These global signals
+    # are for tools that want to monitor all operations without subscribing
+    # to each one.
 
     @signal()
-    def OperationStarted(
+    def OperationCreated(
         self,
-        operation_id: DBusStr,
+        object_path: DBusObjectPath,
         operation_type: DBusStr,
-        description: DBusStr,
         target: DBusStr,
-    ) -> Annotated[tuple[str, str, str, str], "(ssss)"]:
-        """Emitted when an operation begins.
+    ) -> Annotated[tuple[str, str, str], "(oss)"]:
+        """Emitted when a new operation is created.
+
+        Clients can use the object_path to subscribe to the operation's
+        signals for detailed progress.
 
         Args:
-            operation_id: Unique ID for tracking this operation
+            object_path: D-Bus path to the operation object
             operation_type: Type of operation (create, delete, start, stop, setup_user)
-            description: Human-readable description (e.g., "Creating container: mybox")
             target: Target of the operation (usually container name)
         """
-        return (operation_id, operation_type, description, target)
+        return (object_path, operation_type, target)
 
     @signal()
-    def OperationMessage(
+    def OperationRemoved(
         self,
-        operation_id: DBusStr,
-        message_type: int,
-        message: DBusStr,
-        indent_level: int,
-    ) -> Annotated[tuple[str, int, str, int], "(sisi)"]:
-        """Emitted for progress messages within an operation.
-
-        Args:
-            operation_id: Operation this message belongs to
-            message_type: Type of message (0=info, 1=success, 2=warning, 3=error, 4=dim, 5=hint)
-            message: The message text
-            indent_level: Indentation level for hierarchical display
-        """
-        return (operation_id, message_type, message, indent_level)
-
-    @signal()
-    def OperationCompleted(
-        self,
-        operation_id: DBusStr,
+        object_path: DBusObjectPath,
         success: DBusBool,
-        message: DBusStr,
-    ) -> Annotated[tuple[str, bool, str], "(sbs)"]:
-        """Emitted when an operation finishes.
+    ) -> Annotated[tuple[str, bool], "(ob)"]:
+        """Emitted when an operation is removed (after completion + cleanup delay).
 
         Args:
-            operation_id: Operation that completed
+            object_path: D-Bus path to the operation that was removed
             success: Whether the operation succeeded
-            message: Final message (error message if failed)
         """
-        return (operation_id, success, message)
+        return (object_path, success)
 
-    @signal()
-    def ProgressStarted(
-        self,
-        operation_id: DBusStr,
-        progress_id: DBusStr,
-        description: DBusStr,
-        total: int,
-        indent_level: int,
-    ) -> Annotated[tuple[str, str, str, int, int], "(sssii)"]:
-        """Emitted when a progress bar starts.
+    # =========================================================================
+    # Methods - Operations Query
+    # =========================================================================
 
-        Args:
-            operation_id: Parent operation
-            progress_id: Unique ID for this progress bar
-            description: What's being tracked (e.g., "Downloading image...")
-            total: Total units (-1 for indeterminate)
-            indent_level: Indentation level
+    @method()
+    def ListOperations(self) -> Annotated[list[str], "ao"]:
+        """List all currently running operations.
+
+        Returns:
+            Array of D-Bus object paths for running operations
         """
-        return (operation_id, progress_id, description, total, indent_level)
-
-    @signal()
-    def ProgressUpdate(
-        self,
-        progress_id: DBusStr,
-        current: int,
-        rate: float,
-    ) -> Annotated[tuple[str, int, float], "(sid)"]:
-        """Emitted to update a progress bar.
-
-        Args:
-            progress_id: Progress bar to update
-            current: Current progress value
-            rate: Rate of progress (for ETA calculation)
-        """
-        return (progress_id, current, rate)
-
-    @signal()
-    def ProgressCompleted(
-        self,
-        progress_id: DBusStr,
-        success: DBusBool,
-        message: DBusStr,
-    ) -> Annotated[tuple[str, bool, str], "(sbs)"]:
-        """Emitted when a progress bar completes.
-
-        Args:
-            progress_id: Progress bar that completed
-            success: Whether it succeeded
-            message: Optional completion message (replaces bar)
-        """
-        return (progress_id, success, message)
+        return self._service.list_operations()
 
     # =========================================================================
     # Methods - Container Lifecycle
@@ -292,7 +239,7 @@ class KapsuleManagerInterface(ServiceInterface):
         image: DBusStr,
         session_mode: DBusBool,
         dbus_mux: DBusBool,
-    ) -> DBusStr:
+    ) -> DBusObjectPath:
         """Create a new container.
 
         Args:
@@ -302,7 +249,7 @@ class KapsuleManagerInterface(ServiceInterface):
             dbus_mux: Enable D-Bus multiplexer (implies session_mode)
 
         Returns:
-            Operation ID for tracking progress, or error message if image not specified
+            D-Bus object path for tracking operation progress
         """
         # If no image specified, look up default from caller's config
         actual_image = image
@@ -328,7 +275,7 @@ class KapsuleManagerInterface(ServiceInterface):
         )
 
     @method()
-    async def DeleteContainer(self, name: DBusStr, force: DBusBool) -> DBusStr:
+    async def DeleteContainer(self, name: DBusStr, force: DBusBool) -> DBusObjectPath:
         """Delete a container.
 
         Args:
@@ -336,24 +283,24 @@ class KapsuleManagerInterface(ServiceInterface):
             force: Force removal even if running
 
         Returns:
-            Operation ID for tracking progress
+            D-Bus object path for tracking operation progress
         """
         return await self._service.delete_container(name=name, force=force)
 
     @method()
-    async def StartContainer(self, name: DBusStr) -> DBusStr:
+    async def StartContainer(self, name: DBusStr) -> DBusObjectPath:
         """Start a stopped container.
 
         Args:
             name: Container name
 
         Returns:
-            Operation ID for tracking progress
+            D-Bus object path for tracking operation progress
         """
         return await self._service.start_container(name=name)
 
     @method()
-    async def StopContainer(self, name: DBusStr, force: DBusBool) -> DBusStr:
+    async def StopContainer(self, name: DBusStr, force: DBusBool) -> DBusObjectPath:
         """Stop a running container.
 
         Args:
@@ -361,7 +308,7 @@ class KapsuleManagerInterface(ServiceInterface):
             force: Force stop
 
         Returns:
-            Operation ID for tracking progress
+            D-Bus object path for tracking operation progress
         """
         return await self._service.stop_container(name=name, force=force)
 
@@ -377,7 +324,7 @@ class KapsuleManagerInterface(ServiceInterface):
         gid: DBusUInt32,
         username: DBusStr,
         home_dir: DBusStr,
-    ) -> DBusStr:
+    ) -> DBusObjectPath:
         """Set up a host user in a container.
 
         This mounts the user's home directory and creates a matching
@@ -391,7 +338,7 @@ class KapsuleManagerInterface(ServiceInterface):
             home_dir: Path to home directory on host
 
         Returns:
-            Operation ID for tracking progress
+            D-Bus object path for tracking operation progress
         """
         return await self._service.setup_user(
             container_name=container_name,
@@ -552,6 +499,7 @@ class KapsuleService:
         temp_interface = KapsuleManagerInterface.create_deferred(self._bus)
 
         self._container_service = ContainerService(temp_interface, self._incus)
+        self._container_service.set_bus(self._bus)  # Enable operation D-Bus objects
         temp_interface.set_service(self._container_service)
 
         self._interface = temp_interface

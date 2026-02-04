@@ -213,8 +213,16 @@ def resolve_type(annotation: ast.expr | None) -> str:
     
     return "v"
 
-def parse_service_interface(source_path: Path) -> tuple[list[DBusMethod], list[DBusSignal], list[DBusProperty]]:
-    """Parse the service.py file to extract D-Bus interface definitions."""
+def parse_service_interface(
+    source_path: Path,
+    class_name: str,
+) -> tuple[list[DBusMethod], list[DBusSignal], list[DBusProperty]]:
+    """Parse a Python file to extract D-Bus interface definitions from a class.
+    
+    Args:
+        source_path: Path to the Python source file
+        class_name: Name of the ServiceInterface class to parse
+    """
     source = source_path.read_text()
     tree = ast.parse(source)
     
@@ -222,9 +230,9 @@ def parse_service_interface(source_path: Path) -> tuple[list[DBusMethod], list[D
     signals: list[DBusSignal] = []
     properties: list[DBusProperty] = []
     
-    # Find the KapsuleManagerInterface class
+    # Find the specified class
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == "KapsuleManagerInterface":
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
             # Process class body
             for item in node.body:
                 if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -463,32 +471,42 @@ def initialize_type_aliases(daemon_path: Path) -> None:
         TYPE_ALIASES.update(parsed)
 
 
-def generate_introspection_xml(service_path: Path) -> str:
-    """Generate D-Bus introspection XML for Qt.
+def generate_interface_xml(
+    interface_name: str,
+    object_path: str,
+    methods: list[DBusMethod],
+    signals: list[DBusSignal],
+    properties: list[DBusProperty],
+    comment: str = "",
+) -> str:
+    """Generate D-Bus introspection XML for a single interface.
     
     Args:
-        service_path: Path to service.py
+        interface_name: Full D-Bus interface name (e.g., "org.kde.kapsule.Operation")
+        object_path: D-Bus object path (e.g., "/org/kde/kapsule/operations")
+        methods: List of methods
+        signals: List of signals
+        properties: List of properties
+        comment: Optional comment for the XML header
     """
-    # Initialize type aliases from dbus_types.py
-    initialize_type_aliases(service_path.parent)
-    
-    methods, signals, properties = parse_service_interface(service_path)
-    
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"',
         '    "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">',
         '',
-        '<!--',
-        '  D-Bus Introspection XML for org.kde.kapsule.Manager',
-        '  Auto-generated from service.py - DO NOT EDIT',
-        '-->',
-        '',
-        '<node name="/org/kde/kapsule">',
     ]
     
-    # Our interface
-    lines.append('  <interface name="org.kde.kapsule.Manager">')
+    if comment:
+        lines.extend([
+            '<!--',
+            f'  {comment}',
+            '  Auto-generated - DO NOT EDIT',
+            '-->',
+            '',
+        ])
+    
+    lines.append(f'<node name="{object_path}">')
+    lines.append(f'  <interface name="{interface_name}">')
     
     # Methods (sorted alphabetically)
     for method in sorted(methods, key=lambda m: m.name):
@@ -536,7 +554,12 @@ def main() -> int:
         "-o",
         "--output",
         type=Path,
-        help="Output file path (default: stdout)",
+        help="Output file path for Manager interface (default: stdout)",
+    )
+    parser.add_argument(
+        "--operation-output",
+        type=Path,
+        help="Output file path for Operation interface",
     )
     parser.add_argument(
         "--service-path",
@@ -544,21 +567,56 @@ def main() -> int:
         default=Path(__file__).parent.parent / "src" / "daemon" / "service.py",
         help="Path to service.py file",
     )
+    parser.add_argument(
+        "--operations-path",
+        type=Path,
+        default=Path(__file__).parent.parent / "src" / "daemon" / "operations.py",
+        help="Path to operations.py file",
+    )
     args = parser.parse_args()
 
+    daemon_path = args.service_path.parent
+    
     try:
-        xml = generate_introspection_xml(args.service_path)
+        # Initialize type aliases from dbus_types.py
+        initialize_type_aliases(daemon_path)
+        
+        # Generate Manager interface XML
+        methods, signals, properties = parse_service_interface(
+            args.service_path, "KapsuleManagerInterface"
+        )
+        manager_xml = generate_interface_xml(
+            "org.kde.kapsule.Manager",
+            "/org/kde/kapsule",
+            methods, signals, properties,
+            "D-Bus Introspection XML for org.kde.kapsule.Manager",
+        )
+        
+        if args.output:
+            args.output.write_text(manager_xml)
+            print(f"Generated {args.output}", file=sys.stderr)
+        else:
+            print(manager_xml)
+        
+        # Generate Operation interface XML if requested
+        if args.operation_output:
+            op_methods, op_signals, op_properties = parse_service_interface(
+                args.operations_path, "OperationInterface"
+            )
+            operation_xml = generate_interface_xml(
+                "org.kde.kapsule.Operation",
+                "/org/kde/kapsule/operations",
+                op_methods, op_signals, op_properties,
+                "D-Bus Introspection XML for org.kde.kapsule.Operation",
+            )
+            args.operation_output.write_text(operation_xml)
+            print(f"Generated {args.operation_output}", file=sys.stderr)
+            
     except Exception as e:
         print(f"Error generating introspection XML: {e}", file=sys.stderr)
         import traceback
         traceback.print_exc()
         return 1
-
-    if args.output:
-        args.output.write_text(xml)
-        print(f"Generated {args.output}", file=sys.stderr)
-    else:
-        print(xml)
 
     return 0
 

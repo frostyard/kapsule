@@ -2,6 +2,12 @@
 
 Provides decorators and utilities for daemon operations that emit
 progress signals over D-Bus.
+
+Each operation is exposed as a separate D-Bus object at
+/org/kde/kapsule/operations/{uuid}. This allows clients to:
+- Subscribe to signals for only the operations they care about
+- Avoid race conditions by getting the object path before work starts
+- Cancel operations via a method call
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     AsyncIterator,
     Awaitable,
@@ -21,6 +28,19 @@ from typing import (
     Concatenate,
     ParamSpec,
     TypeVar,
+)
+
+from dbus_fast.service import ServiceInterface
+from dbus_fast.aio import MessageBus
+
+from .dbus_types import (
+    DBusStr,
+    DBusBool,
+    DBusObjectPath,
+    dbus_property,
+    method,
+    signal,
+    PropertyAccess,
 )
 
 if TYPE_CHECKING:
@@ -52,12 +72,204 @@ class OperationError(Exception):
     pass
 
 
+# =============================================================================
+# Operation D-Bus Interface
+# =============================================================================
+
+
+class OperationInterface(ServiceInterface):
+    """D-Bus interface for a single operation.
+
+    Each running operation gets its own D-Bus object at
+    /org/kde/kapsule/operations/{uuid}. This allows clients to:
+    - Subscribe to signals for just this operation
+    - Cancel the operation
+    - Query operation status
+
+    The interface is: org.kde.kapsule.Operation
+    """
+
+    def __init__(self, op_id: str, op_type: str, description: str, target: str):
+        super().__init__("org.kde.kapsule.Operation")
+        self._op_id = op_id
+        self._op_type = op_type
+        self._description = description
+        self._target = target
+        self._status = "running"
+        self._cancel_requested = False
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def object_path(self) -> str:
+        """Get the D-Bus object path for this operation."""
+        return f"/org/kde/kapsule/operations/{self._op_id}"
+
+    def set_task(self, task: asyncio.Task[None]) -> None:
+        """Set the asyncio task for this operation (for cancellation)."""
+        self._task = task
+
+    # -------------------------------------------------------------------------
+    # Properties
+    # -------------------------------------------------------------------------
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Id(self) -> DBusStr:
+        """Unique identifier for this operation."""
+        return self._op_id
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Type(self) -> DBusStr:
+        """Operation type (create, delete, start, stop, etc.)."""
+        return self._op_type
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Description(self) -> DBusStr:
+        """Human-readable description of this operation."""
+        return self._description
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Target(self) -> DBusStr:
+        """Target of the operation (usually container name)."""
+        return self._target
+
+    @dbus_property(access=PropertyAccess.READ)
+    def Status(self) -> DBusStr:
+        """Current status: running, completed, failed, cancelled."""
+        return self._status
+
+    # -------------------------------------------------------------------------
+    # Signals
+    # -------------------------------------------------------------------------
+
+    @signal()
+    def Message(
+        self,
+        message_type: int,
+        message: DBusStr,
+        indent_level: int,
+    ) -> Annotated[tuple[int, str, int], "(isi)"]:
+        """Emitted for progress messages.
+
+        Args:
+            message_type: Type (0=info, 1=success, 2=warning, 3=error, 4=dim, 5=hint)
+            message: The message text
+            indent_level: Indentation level for hierarchical display
+        """
+        return (message_type, message, indent_level)
+
+    @signal()
+    def ProgressStarted(
+        self,
+        progress_id: DBusStr,
+        description: DBusStr,
+        total: int,
+        indent_level: int,
+    ) -> Annotated[tuple[str, str, int, int], "(ssii)"]:
+        """Emitted when a progress bar starts.
+
+        Args:
+            progress_id: Unique ID for this progress bar
+            description: What's being tracked (e.g., "Downloading image...")
+            total: Total units (-1 for indeterminate)
+            indent_level: Indentation level
+        """
+        return (progress_id, description, total, indent_level)
+
+    @signal()
+    def ProgressUpdate(
+        self,
+        progress_id: DBusStr,
+        current: int,
+        rate: float,
+    ) -> Annotated[tuple[str, int, float], "(sid)"]:
+        """Emitted to update a progress bar.
+
+        Args:
+            progress_id: Progress bar to update
+            current: Current progress value
+            rate: Rate of progress (for ETA calculation)
+        """
+        return (progress_id, current, rate)
+
+    @signal()
+    def ProgressCompleted(
+        self,
+        progress_id: DBusStr,
+        success: DBusBool,
+        message: DBusStr,
+    ) -> Annotated[tuple[str, bool, str], "(sbs)"]:
+        """Emitted when a progress bar completes.
+
+        Args:
+            progress_id: Progress bar that completed
+            success: Whether it succeeded
+            message: Optional completion message (replaces bar)
+        """
+        return (progress_id, success, message)
+
+    @signal()
+    def Completed(
+        self,
+        success: DBusBool,
+        message: DBusStr,
+    ) -> Annotated[tuple[bool, str], "(bs)"]:
+        """Emitted when this operation finishes.
+
+        Args:
+            success: Whether the operation succeeded
+            message: Error message if failed, empty if succeeded
+        """
+        return (success, message)
+
+    # -------------------------------------------------------------------------
+    # Methods
+    # -------------------------------------------------------------------------
+
+    @method()
+    def Cancel(self) -> DBusBool:
+        """Request cancellation of this operation.
+
+        Returns True if cancellation was requested, False if already
+        completed or cancellation not supported.
+        """
+        if self._status != "running":
+            return False
+
+        self._cancel_requested = True
+
+        # If we have a task, cancel it
+        if self._task and not self._task.done():
+            self._task.cancel()
+
+        return True
+
+    # -------------------------------------------------------------------------
+    # Internal helpers (not exposed over D-Bus)
+    # -------------------------------------------------------------------------
+
+    def is_cancel_requested(self) -> bool:
+        """Check if cancellation has been requested."""
+        return self._cancel_requested
+
+    def mark_completed(self, success: bool, message: str = "") -> None:
+        """Mark the operation as completed and emit the Completed signal."""
+        self._status = "completed" if success else "failed"
+        if self._cancel_requested and not success:
+            self._status = "cancelled"
+        self.Completed(success, message)
+
+
+# =============================================================================
+# Progress Bar and Reporter
+# =============================================================================
+
+
 @dataclass
 class ProgressBar:
     """Handle for an active progress bar."""
 
     progress_id: str
-    _reporter: "OperationReporter"
+    _operation: OperationInterface
 
     def update(self, current: int, rate: float = 0.0) -> None:
         """Update progress bar position.
@@ -66,7 +278,7 @@ class ProgressBar:
             current: Current progress value (bytes, items, etc.)
             rate: Rate of progress (bytes/sec, etc.) for ETA calculation
         """
-        self._reporter._interface.ProgressUpdate(self.progress_id, current, rate)
+        self._operation.ProgressUpdate(self.progress_id, current, rate)
 
     def complete(self, success: bool = True, message: str = "") -> None:
         """Complete and remove the progress bar.
@@ -75,7 +287,7 @@ class ProgressBar:
             success: Whether the operation succeeded
             message: Optional message to display (replaces the bar)
         """
-        self._reporter._interface.ProgressCompleted(self.progress_id, success, message)
+        self._operation.ProgressCompleted(self.progress_id, success, message)
 
 
 @dataclass
@@ -83,7 +295,7 @@ class OperationReporter:
     """Injected into operations for progress reporting.
 
     This is the main interface operations use to report progress.
-    Messages are emitted as D-Bus signals that clients can subscribe to.
+    Messages are emitted as D-Bus signals on the operation object.
 
     Usage in operation methods:
         async def create_container(self, progress: OperationReporter, name: str, ...):
@@ -96,14 +308,24 @@ class OperationReporter:
             progress.success("Image downloaded")
     """
 
-    operation_id: str
-    _interface: "KapsuleManagerInterface"
+    _operation: OperationInterface
     _indent: int = 1  # Default indent for messages within operation
+
+    @property
+    def operation_id(self) -> str:
+        """Get the operation ID."""
+        return self._operation._op_id
+
+    def is_cancelled(self) -> bool:
+        """Check if the operation has been cancelled.
+
+        Operations should check this periodically and stop gracefully if True.
+        """
+        return self._operation.is_cancel_requested()
 
     def info(self, message: str, indent: int | None = None) -> None:
         """Emit an info message."""
-        self._interface.OperationMessage(
-            self.operation_id,
+        self._operation.Message(
             int(MessageType.INFO),
             message,
             indent if indent is not None else self._indent,
@@ -111,8 +333,7 @@ class OperationReporter:
 
     def success(self, message: str, indent: int | None = None) -> None:
         """Emit a success message."""
-        self._interface.OperationMessage(
-            self.operation_id,
+        self._operation.Message(
             int(MessageType.SUCCESS),
             message,
             indent if indent is not None else self._indent,
@@ -120,8 +341,7 @@ class OperationReporter:
 
     def warning(self, message: str, indent: int | None = None) -> None:
         """Emit a warning message."""
-        self._interface.OperationMessage(
-            self.operation_id,
+        self._operation.Message(
             int(MessageType.WARNING),
             message,
             indent if indent is not None else self._indent,
@@ -129,8 +349,7 @@ class OperationReporter:
 
     def error(self, message: str, indent: int | None = None) -> None:
         """Emit an error message."""
-        self._interface.OperationMessage(
-            self.operation_id,
+        self._operation.Message(
             int(MessageType.ERROR),
             message,
             indent if indent is not None else self._indent,
@@ -138,8 +357,9 @@ class OperationReporter:
 
     def dim(self, message: str, indent: int | None = None) -> None:
         """Emit a dimmed/secondary message."""
-        self._interface.OperationMessage(
-            self.operation_id,
+    def dim(self, message: str, indent: int | None = None) -> None:
+        """Emit a dimmed/secondary message."""
+        self._operation.Message(
             int(MessageType.DIM),
             message,
             indent if indent is not None else self._indent,
@@ -147,8 +367,7 @@ class OperationReporter:
 
     def hint(self, message: str, indent: int | None = None) -> None:
         """Emit a hint message."""
-        self._interface.OperationMessage(
-            self.operation_id,
+        self._operation.Message(
             int(MessageType.HINT),
             message,
             indent if indent is not None else self._indent,
@@ -170,14 +389,13 @@ class OperationReporter:
             indent: Indent level for display
         """
         progress_id = str(uuid.uuid4())
-        self._interface.ProgressStarted(
-            self.operation_id,
+        self._operation.ProgressStarted(
             progress_id,
             description,
             total,
             indent if indent is not None else self._indent,
         )
-        return ProgressBar(progress_id, self)
+        return ProgressBar(progress_id, self._operation)
 
     @asynccontextmanager
     async def track(
@@ -217,10 +435,14 @@ class OperationReporter:
             levels: Number of indent levels to add
         """
         return OperationReporter(
-            operation_id=self.operation_id,
-            _interface=self._interface,
+            _operation=self._operation,
             _indent=self._indent + levels,
         )
+
+
+# =============================================================================
+# Operation Tracking
+# =============================================================================
 
 
 @dataclass
@@ -231,6 +453,7 @@ class RunningOperation:
     operation_type: str
     target: str
     task: asyncio.Task[None]
+    interface: OperationInterface
 
 
 @dataclass
@@ -238,14 +461,38 @@ class OperationTracker:
     """Tracks all running operations in the daemon."""
 
     _operations: dict[str, RunningOperation] = field(default_factory=dict)
+    _bus: MessageBus | None = None
+    _cleanup_delay: float = 5.0  # Seconds to keep completed operations
+
+    def set_bus(self, bus: MessageBus) -> None:
+        """Set the message bus for exporting operation objects."""
+        self._bus = bus
 
     def add(self, op: RunningOperation) -> None:
-        """Register a running operation."""
+        """Register a running operation and export it to D-Bus."""
         self._operations[op.id] = op
+        if self._bus:
+            self._bus.export(op.interface.object_path, op.interface)
 
     def remove(self, op_id: str) -> None:
-        """Remove a completed operation."""
-        self._operations.pop(op_id, None)
+        """Remove a completed operation from tracking.
+
+        Note: The D-Bus object is removed after a delay to allow clients
+        to read the final state.
+        """
+        op = self._operations.pop(op_id, None)
+        if op and self._bus:
+            # Schedule delayed unexport
+            asyncio.create_task(self._delayed_unexport(op.interface))
+
+    async def _delayed_unexport(self, interface: OperationInterface) -> None:
+        """Unexport an operation after a delay."""
+        await asyncio.sleep(self._cleanup_delay)
+        if self._bus:
+            try:
+                self._bus.unexport(interface.object_path, interface)
+            except Exception:
+                pass  # Already unexported or bus closed
 
     def get(self, op_id: str) -> RunningOperation | None:
         """Get an operation by ID."""
@@ -254,6 +501,15 @@ class OperationTracker:
     def list_all(self) -> list[RunningOperation]:
         """List all running operations."""
         return list(self._operations.values())
+
+    def list_paths(self) -> list[str]:
+        """List D-Bus object paths of all running operations."""
+        return [op.interface.object_path for op in self._operations.values()]
+
+
+# =============================================================================
+# Operation Decorator
+# =============================================================================
 
 
 def operation(
@@ -264,20 +520,21 @@ def operation(
     [Callable[Concatenate[Any, OperationReporter, P], Awaitable[None]]],
     Callable[Concatenate[Any, P], Awaitable[str]],
 ]:
-    """Decorator for daemon operations with automatic lifecycle signals.
+    """Decorator for daemon operations with D-Bus object lifecycle.
 
     Wraps an async method to:
     - Generate a unique operation ID
-    - Emit OperationStarted signal
+    - Create a D-Bus object for the operation at /org/kde/kapsule/operations/{id}
     - Inject an OperationReporter as the first parameter (after self)
     - Run the operation in a background task
-    - Emit OperationCompleted on success or failure
+    - Return the D-Bus object path immediately (client subscribes to signals)
+    - Emit Completed signal on the operation object when done
     - Handle OperationError for user-friendly error messages
 
     Args:
         operation_type: Type identifier (e.g., "create", "delete", "start")
         description: Template string with {param} placeholders for kwargs
-        target_param: Name of the parameter that represents the target (for signals)
+        target_param: Name of the parameter that represents the target
 
     Example:
         @operation("create", "Creating container: {name}")
@@ -289,6 +546,9 @@ def operation(
         ) -> None:
             progress.info(f"Image: {image}")
             ...
+
+    Returns:
+        The D-Bus object path: /org/kde/kapsule/operations/{uuid}
     """
 
     def decorator(
@@ -305,37 +565,40 @@ def operation(
             # Get target from kwargs
             target = str(kwargs.get(target_param, ""))
 
-            # Create the reporter
+            # Create the operation D-Bus interface
+            op_interface = OperationInterface(op_id, operation_type, desc, target)
+
+            # Create the reporter that wraps the interface
             reporter = OperationReporter(
-                operation_id=op_id,
-                _interface=self._interface,
+                _operation=op_interface,
             )
 
-            # Emit start signal
-            self._interface.OperationStarted(op_id, operation_type, desc, target)
-
-            # Run the operation in a task so we return immediately
+            # Run the operation in a task so we return the path immediately
             async def run_operation() -> None:
                 try:
                     await func(self, reporter, *args, **kwargs)
-                    self._interface.OperationCompleted(op_id, True, "")
+                    op_interface.mark_completed(True, "")
+                except asyncio.CancelledError:
+                    # Operation was cancelled
+                    op_interface.mark_completed(False, "Operation cancelled")
                 except OperationError as e:
                     # Expected errors - user-friendly message
-                    self._interface.OperationCompleted(op_id, False, str(e))
+                    op_interface.mark_completed(False, str(e))
                 except Exception as e:
                     # Unexpected errors - log and report
                     import traceback
 
                     traceback.print_exc()
-                    self._interface.OperationCompleted(op_id, False, f"Internal error: {e}")
+                    op_interface.mark_completed(False, f"Internal error: {e}")
                 finally:
-                    # Remove from tracker if present
+                    # Remove from tracker after completion
                     if hasattr(self, "_tracker"):
                         self._tracker.remove(op_id)
 
             task = asyncio.create_task(run_operation(), name=f"op-{operation_type}-{op_id[:8]}")
+            op_interface.set_task(task)
 
-            # Track the operation if we have a tracker
+            # Track the operation and export to D-Bus
             if hasattr(self, "_tracker"):
                 self._tracker.add(
                     RunningOperation(
@@ -343,10 +606,12 @@ def operation(
                         operation_type=operation_type,
                         target=target,
                         task=task,
+                        interface=op_interface,
                     )
                 )
 
-            return op_id
+            # Return the D-Bus object path
+            return op_interface.object_path
 
         return wrapper
 

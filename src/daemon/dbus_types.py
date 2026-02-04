@@ -175,6 +175,8 @@ def _convert_annotations(fn: F) -> F:
         )
     except Exception:
         # Fall back to raw annotations if evaluation fails
+        # This happens when type aliases aren't in scope - the caller should
+        # import all used type aliases in their module
         hints = getattr(fn, "__annotations__", {})
 
     new_annotations: dict[str, Any] = {}

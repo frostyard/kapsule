@@ -51,8 +51,9 @@ _ENTER_ENV_SKIP = frozenset({
 class ContainerService:
     """Container lifecycle operations exposed over D-Bus.
 
-    Each public method decorated with @operation becomes a D-Bus method
-    that returns an operation ID. Progress is reported via D-Bus signals.
+    Each public method decorated with @operation returns a D-Bus object
+    path for the operation. Clients subscribe to signals on that object
+    for progress updates.
     """
 
     def __init__(
@@ -69,6 +70,18 @@ class ContainerService:
         self._interface = interface
         self._incus = incus
         self._tracker = OperationTracker()
+
+    def set_bus(self, bus: "MessageBus") -> None:
+        """Set the message bus for operation object export.
+
+        Must be called after initialization to enable D-Bus operation objects.
+        """
+        from dbus_fast.aio import MessageBus as MB
+        self._tracker.set_bus(bus)
+
+    def list_operations(self) -> list[str]:
+        """List D-Bus object paths of all running operations."""
+        return self._tracker.list_paths()
 
     # -------------------------------------------------------------------------
     # Container Lifecycle Operations
