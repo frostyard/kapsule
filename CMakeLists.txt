@@ -68,6 +68,12 @@ endif()
 # ============================================================================
 
 if(INSTALL_PYTHON_DAEMON)
+    # Install kapsule package __init__.py (required for Python to recognize the package)
+    install(FILES
+        src/__init__.py
+        DESTINATION "${KAPSULE_PYTHON_DIR}/kapsule"
+    )
+
     # Install kapsule daemon package
     install(FILES
         src/daemon/__init__.py
