@@ -4,12 +4,12 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Test: Nested containers (Docker-in-Kapsule)
+# Test: Nested containers (Docker & Podman in Kapsule)
 #
 # Verifies that nested container support works by:
 #   1. Creating a Kapsule container
-#   2. Installing Docker inside it
-#   3. Running docker hello-world to confirm nesting works
+#   2. Installing Docker and Podman inside it
+#   3. Running hello-world via both runtimes to confirm nesting works
 
 source "$(dirname "${BASH_SOURCE[0]}")/helpers.sh"
 
@@ -55,13 +55,13 @@ kapsule_exec "$CONTAINER_NAME" "true" 2>/dev/null
 # ============================================================================
 
 echo ""
-echo "2. Install Docker inside container"
-kapsule_exec "$CONTAINER_NAME" "sudo pacman -Sy --noconfirm docker" || {
-    echo "Docker installation failed"
+echo "2. Install Docker and Podman inside container"
+kapsule_exec "$CONTAINER_NAME" "sudo pacman -Sy --noconfirm podman docker" || {
+    echo "Docker/Podman installation failed"
     cleanup_container "$CONTAINER_NAME"
     exit 1
 }
-echo -e "  ${GREEN}✓${NC} Docker installed"
+echo -e "  ${GREEN}✓${NC} Docker and Podman installed"
 
 # ============================================================================
 # 3. Start Docker daemon
@@ -86,7 +86,7 @@ kapsule_exec "$CONTAINER_NAME" "sudo docker info" &>/dev/null || {
 echo -e "  ${GREEN}✓${NC} Docker daemon running"
 
 # ============================================================================
-# 4. Run hello-world container
+# 4. Run Docker hello-world
 # ============================================================================
 
 echo ""
@@ -98,7 +98,22 @@ hello_output=$(kapsule_exec "$CONTAINER_NAME" "sudo docker run --rm hello-world"
     exit 1
 }
 
-assert_contains "hello-world output contains greeting" "$hello_output" "Hello from Docker!"
+assert_contains "Docker hello-world output contains greeting" "$hello_output" "Hello from Docker!"
+
+# ============================================================================
+# 5. Run Podman hello-world (rootless)
+# ============================================================================
+
+echo ""
+echo "5. Run Podman hello-world (rootless)"
+podman_output=$(kapsule_exec "$CONTAINER_NAME" "podman run --rm docker.io/hello-world" 2>&1) || {
+    echo "Podman hello-world failed:"
+    echo "$podman_output"
+    cleanup_container "$CONTAINER_NAME"
+    exit 1
+}
+
+assert_contains "Podman hello-world output contains greeting" "$podman_output" "Hello from Docker!"
 
 # ============================================================================
 # Cleanup
@@ -107,4 +122,4 @@ assert_contains "hello-world output contains greeting" "$hello_output" "Hello fr
 cleanup_container "$CONTAINER_NAME"
 
 echo ""
-echo "Nested container tests passed!"
+echo "Nested container tests passed! (Docker + Podman)"
