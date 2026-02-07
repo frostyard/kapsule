@@ -825,7 +825,6 @@ class ContainerService:
         # Format: (item, is_env_var, source_subpath_override)
         runtime_links: list[tuple[str, bool, str | None]] = [
             ("WAYLAND_DISPLAY", True, None),
-            ("XAUTHORITY", True, None),
             ("pipewire-0", False, None),
         ]
 
@@ -856,6 +855,28 @@ class ContainerService:
             except IncusError:
                 pass  # Symlink might already exist
 
+        # X11: symlink the individual socket from the host's /tmp/.X11-unix/
+        # into the container. The host's /tmp is accessible via hostfs.
+        display = env.get("DISPLAY", "")
+        if display.startswith(":"):
+            display_num = display.lstrip(":").split(".")[0]  # ":0.0" -> "0"
+            x11_socket = f"X{display_num}"
+            host_x11 = f"/.kapsule/host/tmp/.X11-unix/{x11_socket}"
+            container_x11_dir = "/tmp/.X11-unix"
+            try:
+                await self._incus.mkdir(
+                    container_name, container_x11_dir, uid=0, gid=0, mode="1777",
+                )
+            except IncusError:
+                pass
+            try:
+                await self._incus.create_symlink(
+                    container_name, f"{container_x11_dir}/{x11_socket}", host_x11,
+                    uid=0, gid=0,
+                )
+            except IncusError:
+                pass  # Symlink might already exist
+
         # PulseAudio: create a real pulse/ directory and symlink native inside.
         # PulseAudio refuses to use pulse/ if it's itself a symlink (security check).
         pulse_dir = f"{runtime_dir}/pulse"
@@ -870,6 +891,21 @@ class ContainerService:
             )
         except IncusError:
             pass
+
+        # XAUTHORITY: the env value is a full path (e.g. /run/user/1000/xauth_LAPpeP).
+        # Symlink just the basename inside the container's runtime dir to the
+        # corresponding host file via hostfs.
+        xauth_path = env.get("XAUTHORITY", "")
+        if xauth_path:
+            xauth_basename = os.path.basename(xauth_path)
+            host_xauth = f"{host_runtime_dir}/{xauth_basename}"
+            target_xauth = f"{runtime_dir}/{xauth_basename}"
+            try:
+                await self._incus.create_symlink(
+                    container_name, target_xauth, host_xauth, uid=uid, gid=gid,
+                )
+            except IncusError:
+                pass  # Symlink might already exist
 
     # -------------------------------------------------------------------------
     # Private Helper Methods

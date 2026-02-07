@@ -31,12 +31,6 @@ KAPSULE_BASE_PROFILE = ProfilesPost(
             "path": "/",
             "pool": "default",
         },
-        # X11 socket passthrough, not user-specific
-        "x11": {
-            "type": "disk",
-            "source": "/tmp/.X11-unix",
-            "path": "/tmp/.X11-unix",
-        },
         # GPU passthrough
         "gpu": {
             "type": "gpu",
