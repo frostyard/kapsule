@@ -631,16 +631,22 @@ class ContainerService:
             env_args.extend(["--env", f"{key}={value}"])
             whitelist_keys.append(key)
 
-        # Build the command to run inside the container
-        # Use -l (login) for proper shell setup, but -w to whitelist
-        # env vars passed via incus exec --env. Without -w, su -l
-        # would clear vars like XDG_RUNTIME_DIR that are needed for
-        # PulseAudio/PipeWire socket discovery.
+        # Build the command to run inside the container.
+        #
+        # Always use su -l for consistent behavior whether entering a
+        # shell or running a command. su -l provides:
+        #   - PAM session setup (pam_systemd, etc.)
+        #   - Supplementary group resolution via initgroups()
+        #   - Login shell profile sourcing (.bash_profile, etc.)
+        #
+        # The -w flag whitelists env vars passed via incus exec --env,
+        # preventing su -l from clearing vars like XDG_RUNTIME_DIR
+        # that are needed for PulseAudio/PipeWire socket discovery.
         whitelist_arg = ",".join(whitelist_keys) if whitelist_keys else ""
         if command:
             exec_cmd = ["su", "-l", "-w", whitelist_arg, "-c", " ".join(command), username]
         else:
-            exec_cmd = ["login", "-p", "-f", username]
+            exec_cmd = ["su", "-l", "-w", whitelist_arg, username]
 
         # Build full incus exec command
         exec_args = [
