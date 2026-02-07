@@ -171,6 +171,9 @@ class ContainerService:
         # Apply host-networking fixups (mask services that don't work with lxc.net.0.type=none)
         await self._apply_host_network_fixups(progress, name)
 
+        # Restore file capabilities stripped during image extraction
+        await self._fix_file_capabilities(progress, name)
+
         # Set up session mode if enabled
         if session_mode:
             await self._setup_session_mode(progress, name, dbus_mux)
@@ -693,6 +696,9 @@ class ContainerService:
         except IncusError as e:
             raise OperationError(f"Failed to create container: {e}")
 
+        # Restore file capabilities stripped during image extraction
+        await self._fix_file_capabilities(None, name)
+
     async def _setup_user_sync(
         self,
         container_name: str,
@@ -987,6 +993,48 @@ class ContainerService:
             source=None,
             **{"base-image": None},
         )
+
+    async def _fix_file_capabilities(
+        self,
+        progress: OperationReporter | None,
+        name: str,
+    ) -> None:
+        """Restore file capabilities stripped during image extraction.
+
+        Container images from linuxcontainers.org lose ``security.capability``
+        extended attributes during image build or extraction.  Binaries like
+        ``newuidmap`` / ``newgidmap`` (from the ``shadow`` package) need file
+        capabilities (``cap_setuid+ep`` / ``cap_setgid+ep``) for rootless
+        Podman / Docker to set up user namespaces inside the container.
+
+        Upstream issue: https://github.com/lxc/lxc-ci/issues/955
+
+        This method restores the expected capabilities if the binaries exist
+        and ``setcap`` is available.
+
+        Args:
+            progress: Operation reporter (may be None for silent fixups)
+            name: Container name
+        """
+        caps: list[tuple[str, str]] = [
+            ("/usr/bin/newuidmap", "cap_setuid+ep"),
+            ("/usr/bin/newgidmap", "cap_setgid+ep"),
+        ]
+        for binary, cap in caps:
+            result = subprocess.run(
+                ["incus", "exec", name, "--", "setcap", cap, binary],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                # Binary or setcap may not exist on every image — not fatal
+                if progress:
+                    progress.warning(
+                        f"Could not set {cap} on {binary}: {result.stderr.strip()}"
+                    )
+            else:
+                if progress:
+                    progress.dim(f"Set {cap} on {binary}")
 
     async def _apply_host_network_fixups(
         self,
