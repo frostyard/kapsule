@@ -276,11 +276,6 @@ if(INSTALL_PYTHON_DAEMON)
         DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/kapsule"
     )
 
-    # Kapsule init script
-    install(PROGRAMS
-        scripts/kapsule-init.sh
-        DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/kapsule"
-    )
 endif()
 
 # ============================================================================

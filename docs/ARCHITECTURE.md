@@ -274,7 +274,7 @@ auto &o = out();
 o.info("Creating container...");
 o.success("Container created!");
 o.error("Something went wrong");
-o.hint("Try: kapsule init");
+o.hint("Is the daemon running? Try: systemctl status kapsule-daemon");
 ```
 
 ---

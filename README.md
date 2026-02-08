@@ -19,8 +19,8 @@ A distrobox-like tool using Incus as the container/VM backend, designed for KDE 
 ## Quick Start
 
 ```bash
-# Initialize Incus (first time only, requires root)
-sudo kapsule init
+# Create and enter your distro's default container
+kapsule enter
 
 # Create and enter a container
 kapsule create my-dev --image images:ubuntu/24.04
@@ -71,7 +71,6 @@ kde-builder kapsule
 
 | Command | Description |
 |---------|-------------|
-| `kapsule init` | Initialize Incus (run once as root) |
 | `kapsule create <name>` | Create a new container |
 | `kapsule enter <name>` | Enter a container (interactive shell) |
 | `kapsule enter <name> -- <cmd>` | Run a command in a container |
