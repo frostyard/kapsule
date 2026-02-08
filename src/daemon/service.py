@@ -13,7 +13,7 @@ import contextvars
 from typing import Annotated
 
 from dbus_fast.aio import MessageBus
-from dbus_fast.service import ServiceInterface, dbus_property, dbus_method, dbus_signal
+from dbus_fast.service import ServiceInterface, dbus_property, dbus_method
 from dbus_fast.constants import PropertyAccess
 from dbus_fast.annotations import DBusStr, DBusBool, DBusObjectPath, DBusSignature, DBusUInt32
 from dbus_fast import BusType, Message, MessageType
@@ -172,47 +172,6 @@ class KapsuleManagerInterface(ServiceInterface):
     def Version(self) -> DBusStr:
         """Daemon version."""
         return self._version
-
-    # =========================================================================
-    # Signals for Operation Lifecycle (for monitoring tools)
-    # =========================================================================
-    # Note: Detailed progress signals are emitted on individual operation
-    # objects at /org/kde/kapsule/operations/{id}. These global signals
-    # are for tools that want to monitor all operations without subscribing
-    # to each one.
-
-    @dbus_signal()
-    def OperationCreated(
-        self,
-        object_path: DBusObjectPath,
-        operation_type: DBusStr,
-        target: DBusStr,
-    ) -> Annotated[tuple[str, str, str], DBusSignature("oss")]:
-        """Emitted when a new operation is created.
-
-        Clients can use the object_path to subscribe to the operation's
-        signals for detailed progress.
-
-        Args:
-            object_path: D-Bus path to the operation object
-            operation_type: Type of operation (create, delete, start, stop, setup_user)
-            target: Target of the operation (usually container name)
-        """
-        return (object_path, operation_type, target)
-
-    @dbus_signal()
-    def OperationRemoved(
-        self,
-        object_path: DBusObjectPath,
-        success: DBusBool,
-    ) -> Annotated[tuple[str, bool], DBusSignature("ob")]:
-        """Emitted when an operation is removed (after completion + cleanup delay).
-
-        Args:
-            object_path: D-Bus path to the operation that was removed
-            success: Whether the operation succeeded
-        """
-        return (object_path, success)
 
     # =========================================================================
     # Methods - Operations Query

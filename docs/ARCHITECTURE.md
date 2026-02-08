@@ -34,8 +34,7 @@ Kapsule is an Incus-based container manager with native KDE/Plasma integration, 
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │ org.kde.kapsule.Manager                                             │   │
 │   │ ├── Properties: Version                                             │   │
-│   │ ├── Methods: CreateContainer, DeleteContainer, StartContainer, ...  │   │
-│   │ └── Signals: OperationCreated, OperationRemoved                     │   │
+│   │ └── Methods: CreateContainer, DeleteContainer, StartContainer, ...  │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -114,10 +113,6 @@ StopContainer(name: str, force: bool) -> object_path
 
 # Properties
 Version: str
-
-# Global signals (for monitoring tools)
-OperationCreated(object_path, operation_type, target)
-OperationRemoved(object_path)
 ```
 
 #### Operation Interface (`org.kde.kapsule.Operation`)
