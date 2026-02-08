@@ -6,7 +6,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+
 import pytest
+
+# ---------------------------------------------------------------------------
+# VM configuration
+# ---------------------------------------------------------------------------
+
+TEST_VM = os.environ.get("KAPSULE_TEST_VM", "192.168.100.157")
+SSH_OPTS = [
+    "-o", "ConnectTimeout=5",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "LogLevel=ERROR",
+]
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -19,5 +33,17 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def event_loop_policy():
     """Use default event loop policy."""
-    import asyncio
     return asyncio.DefaultEventLoopPolicy()
+
+
+async def ssh_run_on_vm(*cmd: str) -> asyncio.subprocess.Process:
+    """Run a command on the test VM over SSH and return the process.
+
+    The caller can ``await proc.wait()`` or read stdout/stderr as needed.
+    """
+    full_cmd = ["ssh", *SSH_OPTS, TEST_VM, *cmd]
+    return await asyncio.create_subprocess_exec(
+        *full_cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )

@@ -6,78 +6,144 @@
 
 These tests verify that D-Bus signals are emitted correctly during
 long-running operations like container creation.
+
+The daemon exposes operations as D-Bus objects at
+/org/kde/kapsule/operations/{id}.  Each object implements the
+org.kde.kapsule.Operation interface which emits:
+
+    Message(message_type: i, message: s, indent_level: i)
+    ProgressStarted(progress_id: s, description: s, total: i, indent: i)
+    ProgressUpdate(progress_id: s, current: i, rate: d)
+    ProgressCompleted(progress_id: s, success: b, message: s)
+    Completed(success: b, message: s)
+
+The root object at /org/kde/kapsule implements
+org.freedesktop.DBus.ObjectManager, so InterfacesAdded /
+InterfacesRemoved signals fire when operations are exported /
+unexported.
 """
 
 from __future__ import annotations
 
 import asyncio
 import pytest
-import subprocess
 from dataclasses import dataclass, field
 
-# We use dbus-fast which should be available on the test VM
 from dbus_fast.aio import MessageBus
 from dbus_fast import BusType, Message, MessageType
 
+from conftest import ssh_run_on_vm
+
 
 DBUS_NAME = "org.kde.kapsule"
-DBUS_PATH = "/org/kde/kapsule/Manager"
+DBUS_PATH = "/org/kde/kapsule"
 DBUS_INTERFACE = "org.kde.kapsule.Manager"
 
 CONTAINER_NAME = "test-signals"
 TEST_IMAGE = "images:alpine/edge"
 
 
+# ---------------------------------------------------------------------------
+# Signal collector
+# ---------------------------------------------------------------------------
+
 @dataclass
 class SignalCollector:
     """Collects D-Bus signals during a test."""
 
-    operation_created: list[tuple[str, str, str]] = field(default_factory=list)
-    operation_removed: list[tuple[str, bool]] = field(default_factory=list)
-    progress_updates: list[tuple[str, int, str]] = field(default_factory=list)
+    # ObjectManager signals (operation lifecycle)
+    interfaces_added: list[tuple[str, dict]] = field(default_factory=list)
+    interfaces_removed: list[tuple[str, list[str]]] = field(default_factory=list)
 
-    def on_operation_created(
-        self, object_path: str, operation_type: str, target: str
-    ) -> None:
-        """Called when OperationCreated signal is received."""
-        self.operation_created.append((object_path, operation_type, target))
+    # Operation-level signals
+    progress_started: list[tuple[str, str, str, int, int]] = field(default_factory=list)
+    progress_updates: list[tuple[str, str, int, float]] = field(default_factory=list)
+    progress_completed: list[tuple[str, str, bool, str]] = field(default_factory=list)
+    completed: list[tuple[str, bool, str]] = field(default_factory=list)
+    messages: list[tuple[str, int, str, int]] = field(default_factory=list)
 
-    def on_operation_removed(self, object_path: str, success: bool) -> None:
-        """Called when OperationRemoved signal is received."""
-        self.operation_removed.append((object_path, success))
 
-    def on_progress(self, operation_id: str, progress: int, description: str) -> None:
-        """Called when operation progress signal is received."""
-        self.progress_updates.append((operation_id, progress, description))
+def make_signal_handler(collector: SignalCollector, operation_path: str | None = None):
+    """Build a message handler that dispatches signals into *collector*.
 
+    If *operation_path* is given, operation-level signals are only
+    recorded for that path.
+    """
+
+    def handler(msg: Message) -> None:
+        if msg.message_type != MessageType.SIGNAL:
+            return
+
+        # ObjectManager signals (global, on the root path)
+        if msg.member == "InterfacesAdded":
+            path, ifaces = msg.body
+            collector.interfaces_added.append((path, ifaces))
+        elif msg.member == "InterfacesRemoved":
+            path, ifaces = msg.body
+            collector.interfaces_removed.append((path, ifaces))
+
+        # Operation-level signals (filtered by path when given)
+        if operation_path is not None and msg.path != operation_path:
+            return
+        if msg.member == "Message":
+            mtype, text, indent = msg.body
+            collector.messages.append((msg.path, mtype, text, indent))
+        elif msg.member == "ProgressStarted":
+            pid, desc, total, indent = msg.body
+            collector.progress_started.append((msg.path, pid, desc, total, indent))
+        elif msg.member == "ProgressUpdate":
+            pid, current, rate = msg.body
+            collector.progress_updates.append((msg.path, pid, current, rate))
+        elif msg.member == "ProgressCompleted":
+            pid, success, text = msg.body
+            collector.progress_completed.append((msg.path, pid, success, text))
+        elif msg.member == "Completed":
+            success, text = msg.body
+            collector.completed.append((msg.path, success, text))
+
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# D-Bus helpers
+# ---------------------------------------------------------------------------
 
 async def cleanup_container(name: str) -> None:
-    """Force delete a container, ignoring errors."""
-    proc = await asyncio.create_subprocess_exec(
-        "incus", "delete", name, "--force",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    """Force delete a container on the VM, ignoring errors."""
+    proc = await ssh_run_on_vm("incus", "delete", name, "--force")
     await proc.wait()
+
+
+async def subscribe_kapsule_signals(bus: MessageBus) -> None:
+    """Add a D-Bus match rule for all signals from the kapsule daemon."""
+    await bus.call(
+        Message(
+            destination="org.freedesktop.DBus",
+            path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus",
+            member="AddMatch",
+            signature="s",
+            body=[f"type='signal',sender='{DBUS_NAME}'"],
+        )
+    )
 
 
 async def call_create_container(
     bus: MessageBus, name: str, image: str
 ) -> str:
     """Call CreateContainer via D-Bus and return operation path."""
-    msg = Message(
-        destination=DBUS_NAME,
-        path=DBUS_PATH,
-        interface=DBUS_INTERFACE,
-        member="CreateContainer",
-        signature="ssbb",
-        body=[name, image, False, False],  # name, image, session_mode, dbus_mux
+    reply = await bus.call(
+        Message(
+            destination=DBUS_NAME,
+            path=DBUS_PATH,
+            interface=DBUS_INTERFACE,
+            member="CreateContainer",
+            signature="ssbb",
+            body=[name, image, False, False],
+        )
     )
-    reply = await bus.call(msg)
-
     if reply.message_type == MessageType.ERROR:
         raise RuntimeError(f"CreateContainer failed: {reply.body}")
-
     return reply.body[0]  # Operation object path
 
 
@@ -85,21 +151,41 @@ async def call_delete_container(
     bus: MessageBus, name: str, force: bool = True
 ) -> str:
     """Call DeleteContainer via D-Bus and return operation path."""
-    msg = Message(
-        destination=DBUS_NAME,
-        path=DBUS_PATH,
-        interface=DBUS_INTERFACE,
-        member="DeleteContainer",
-        signature="sb",
-        body=[name, force],
+    reply = await bus.call(
+        Message(
+            destination=DBUS_NAME,
+            path=DBUS_PATH,
+            interface=DBUS_INTERFACE,
+            member="DeleteContainer",
+            signature="sb",
+            body=[name, force],
+        )
     )
-    reply = await bus.call(msg)
-
     if reply.message_type == MessageType.ERROR:
         raise RuntimeError(f"DeleteContainer failed: {reply.body}")
-
     return reply.body[0]
 
+
+async def wait_for_completed(
+    collector: SignalCollector,
+    op_path: str,
+    timeout: float = 20,
+) -> tuple[bool, str]:
+    """Wait until a Completed signal arrives for *op_path*."""
+    elapsed = 0.0
+    step = 0.25
+    while elapsed < timeout:
+        for path, success, message in collector.completed:
+            if path == op_path:
+                return success, message
+        await asyncio.sleep(step)
+        elapsed += step
+    raise TimeoutError(f"No Completed signal for {op_path} within {timeout}s")
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 async def bus():
@@ -123,246 +209,181 @@ async def cleanup():
     await cleanup_container(CONTAINER_NAME)
 
 
-class TestOperationSignals:
-    """Tests for operation lifecycle signals."""
+# =========================================================================
+# Tests — operation lifecycle
+# =========================================================================
 
-    async def test_create_emits_operation_created(
+
+class TestOperationSignals:
+    """Tests for operation lifecycle signals (via ObjectManager)."""
+
+    async def test_create_emits_interfaces_added(
         self, bus: MessageBus, collector: SignalCollector
     ):
-        """Creating a container should emit OperationCreated signal."""
+        """Creating a container should emit InterfacesAdded for the
+        operation object."""
 
-        # Subscribe to signals
-        def on_signal(msg: Message) -> None:
-            if msg.member == "OperationCreated":
-                collector.on_operation_created(*msg.body)
-            elif msg.member == "OperationRemoved":
-                collector.on_operation_removed(*msg.body)
+        await subscribe_kapsule_signals(bus)
+        bus.add_message_handler(make_signal_handler(collector))
 
-        bus.add_message_handler(on_signal)
-
-        # Add match rule for our signals
-        await bus.call(
-            Message(
-                destination="org.freedesktop.DBus",
-                path="/org/freedesktop/DBus",
-                interface="org.freedesktop.DBus",
-                member="AddMatch",
-                signature="s",
-                body=[f"type='signal',sender='{DBUS_NAME}'"],
-            )
-        )
-
-        # Start create operation
         op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
         assert op_path.startswith("/org/kde/kapsule/operations/")
 
-        # Wait for signals (operation should complete within timeout)
-        await asyncio.sleep(10)
+        # Wait for the operation to finish
+        await wait_for_completed(collector, op_path)
 
-        # Verify OperationCreated was emitted
-        assert len(collector.operation_created) >= 1, "No OperationCreated signal received"
-
-        # Find our operation
-        our_ops = [
-            op for op in collector.operation_created if op[2] == CONTAINER_NAME
+        # InterfacesAdded should have fired for our operation
+        our_adds = [
+            (path, ifaces) for path, ifaces in collector.interfaces_added
+            if path == op_path
         ]
-        assert len(our_ops) >= 1, f"No OperationCreated for {CONTAINER_NAME}"
+        assert len(our_adds) >= 1, "No InterfacesAdded for our operation"
+        assert "org.kde.kapsule.Operation" in our_adds[0][1]
 
-        created_path, op_type, target = our_ops[0]
-        assert created_path == op_path
-        assert op_type == "create"
-        assert target == CONTAINER_NAME
-
-    async def test_operation_removed_on_completion(
+    async def test_completed_signal_on_success(
         self, bus: MessageBus, collector: SignalCollector
     ):
-        """Completed operations should emit OperationRemoved signal."""
+        """A successful create should emit Completed(true, '')."""
 
-        def on_signal(msg: Message) -> None:
-            if msg.member == "OperationCreated":
-                collector.on_operation_created(*msg.body)
-            elif msg.member == "OperationRemoved":
-                collector.on_operation_removed(*msg.body)
+        await subscribe_kapsule_signals(bus)
+        bus.add_message_handler(make_signal_handler(collector))
 
-        bus.add_message_handler(on_signal)
-
-        await bus.call(
-            Message(
-                destination="org.freedesktop.DBus",
-                path="/org/freedesktop/DBus",
-                interface="org.freedesktop.DBus",
-                member="AddMatch",
-                signature="s",
-                body=[f"type='signal',sender='{DBUS_NAME}'"],
-            )
-        )
-
-        # Create and wait for completion
         op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        success, message = await wait_for_completed(collector, op_path)
 
-        # Wait for operation to complete and cleanup
-        await asyncio.sleep(15)
+        assert success is True, f"Expected success but got: {message}"
 
-        # Verify OperationRemoved was emitted
-        our_removals = [op for op in collector.operation_removed if op[0] == op_path]
-        assert len(our_removals) >= 1, "No OperationRemoved signal for our operation"
+    async def test_interfaces_removed_after_completion(
+        self, bus: MessageBus, collector: SignalCollector
+    ):
+        """The operation object should be unexported after completion."""
 
-        removed_path, success = our_removals[0]
-        assert removed_path == op_path
-        assert success is True, "Operation should have succeeded"
+        await subscribe_kapsule_signals(bus)
+        bus.add_message_handler(make_signal_handler(collector))
+
+        op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        await wait_for_completed(collector, op_path)
+
+        # Wait for the delayed unexport (daemon keeps objects for a few seconds)
+        await asyncio.sleep(8)
+
+        our_removals = [
+            path for path, _ in collector.interfaces_removed
+            if path == op_path
+        ]
+        assert len(our_removals) >= 1, "Operation was not unexported"
+
+
+# =========================================================================
+# Tests — progress signals
+# =========================================================================
 
 
 class TestProgressSignals:
     """Tests for operation progress signals on operation objects."""
 
+    async def test_create_emits_messages(
+        self, bus: MessageBus, collector: SignalCollector
+    ):
+        """Container creation should emit Message signals with
+        meaningful text."""
+
+        await subscribe_kapsule_signals(bus)
+
+        op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        bus.add_message_handler(make_signal_handler(collector, op_path))
+
+        await wait_for_completed(collector, op_path)
+
+        assert len(collector.messages) > 0, "No Message signals received"
+
+        texts = [m[2] for m in collector.messages if m[2] and m[2].strip()]
+        assert len(texts) > 0, "All Message texts were empty"
+
     async def test_create_progress_increases(
         self, bus: MessageBus, collector: SignalCollector
     ):
-        """Progress during create should increase over time."""
+        """If ProgressUpdate signals are emitted, values should increase
+        monotonically within each progress bar."""
 
-        operation_path: str | None = None
+        await subscribe_kapsule_signals(bus)
 
-        def on_signal(msg: Message) -> None:
-            nonlocal operation_path
-            if msg.member == "OperationCreated":
-                path, op_type, target = msg.body
-                if target == CONTAINER_NAME:
-                    operation_path = path
-            elif msg.member == "Progress" and msg.path == operation_path:
-                # Progress signal: (progress: u, description: s)
-                progress, description = msg.body
-                collector.on_progress(msg.path, progress, description)
+        op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        bus.add_message_handler(make_signal_handler(collector, op_path))
 
-        bus.add_message_handler(on_signal)
+        await wait_for_completed(collector, op_path)
 
-        # Subscribe to all signals from kapsule
-        await bus.call(
-            Message(
-                destination="org.freedesktop.DBus",
-                path="/org/freedesktop/DBus",
-                interface="org.freedesktop.DBus",
-                member="AddMatch",
-                signature="s",
-                body=[f"type='signal',sender='{DBUS_NAME}'"],
-            )
-        )
+        # ProgressUpdate signals are optional (only emitted for downloads
+        # or other measurable work).  If present, verify ordering.
+        if len(collector.progress_updates) > 0:
+            by_id: dict[str, list[int]] = {}
+            for _op, pid, cur, _rate in collector.progress_updates:
+                by_id.setdefault(pid, []).append(cur)
 
-        # Start operation
-        await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+            for pid, values in by_id.items():
+                for i in range(1, len(values)):
+                    assert values[i] >= values[i - 1], (
+                        f"Progress decreased for {pid}: "
+                        f"{values[i - 1]} -> {values[i]}"
+                    )
 
-        # Wait for progress signals
-        await asyncio.sleep(12)
-
-        # Verify we got progress updates
-        assert len(collector.progress_updates) > 0, "No progress signals received"
-
-        # Extract progress values
-        progress_values = [p[1] for p in collector.progress_updates]
-
-        # Progress should be monotonically increasing (or equal)
-        for i in range(1, len(progress_values)):
-            assert progress_values[i] >= progress_values[i - 1], (
-                f"Progress decreased: {progress_values[i - 1]} -> {progress_values[i]}"
-            )
-
-        # Should reach 100% on success
-        assert progress_values[-1] == 100, (
-            f"Final progress should be 100, got {progress_values[-1]}"
-        )
-
-    async def test_progress_has_descriptions(
+    async def test_completed_signal_received(
         self, bus: MessageBus, collector: SignalCollector
     ):
-        """Progress signals should include meaningful descriptions."""
+        """The Completed signal should always fire when the operation
+        finishes."""
 
-        operation_path: str | None = None
+        await subscribe_kapsule_signals(bus)
 
-        def on_signal(msg: Message) -> None:
-            nonlocal operation_path
-            if msg.member == "OperationCreated":
-                path, op_type, target = msg.body
-                if target == CONTAINER_NAME:
-                    operation_path = path
-            elif msg.member == "Progress" and msg.path == operation_path:
-                progress, description = msg.body
-                collector.on_progress(msg.path, progress, description)
+        op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        bus.add_message_handler(make_signal_handler(collector, op_path))
 
-        bus.add_message_handler(on_signal)
+        success, _ = await wait_for_completed(collector, op_path)
+        assert success is True
 
-        await bus.call(
-            Message(
-                destination="org.freedesktop.DBus",
-                path="/org/freedesktop/DBus",
-                interface="org.freedesktop.DBus",
-                member="AddMatch",
-                signature="s",
-                body=[f"type='signal',sender='{DBUS_NAME}'"],
-            )
-        )
 
-        await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
-        await asyncio.sleep(12)
-
-        # Verify descriptions exist and are non-empty
-        descriptions = [p[2] for p in collector.progress_updates]
-        assert len(descriptions) > 0, "No progress signals received"
-
-        # At least some should have meaningful descriptions
-        non_empty = [d for d in descriptions if d and d.strip()]
-        assert len(non_empty) > 0, "All progress descriptions were empty"
+# =========================================================================
+# Tests — error handling
+# =========================================================================
 
 
 class TestErrorHandling:
     """Tests for error signal behavior."""
 
-    async def test_delete_nonexistent_fails_gracefully(self, bus: MessageBus):
-        """Deleting a non-existent container should fail with error."""
+    async def test_delete_nonexistent_reports_failure(
+        self, bus: MessageBus, collector: SignalCollector
+    ):
+        """Deleting a non-existent container should produce a Completed
+        signal with success=False."""
 
-        # Try to delete non-existent container
-        with pytest.raises(RuntimeError) as exc_info:
-            await call_delete_container(bus, "nonexistent-container-xyz", force=True)
+        await subscribe_kapsule_signals(bus)
+        bus.add_message_handler(make_signal_handler(collector))
 
-        # Should get a meaningful error
-        assert "nonexistent" in str(exc_info.value).lower() or "not found" in str(exc_info.value).lower() or "error" in str(exc_info.value).lower()
+        # DeleteContainer returns an operation path (async pattern),
+        # so the error surfaces via the Completed signal.
+        op_path = await call_delete_container(bus, "nonexistent-container-xyz")
+        success, message = await wait_for_completed(collector, op_path)
 
-    async def test_create_duplicate_fails(self, bus: MessageBus, collector: SignalCollector):
-        """Creating a container with existing name should fail."""
+        assert success is False, "Delete of nonexistent container should fail"
+        assert message, "Error message should not be empty"
 
-        def on_signal(msg: Message) -> None:
-            if msg.member == "OperationCreated":
-                collector.on_operation_created(*msg.body)
-            elif msg.member == "OperationRemoved":
-                collector.on_operation_removed(*msg.body)
+    async def test_create_duplicate_reports_failure(
+        self, bus: MessageBus, collector: SignalCollector
+    ):
+        """Creating a container with an existing name should fail via
+        the Completed signal."""
 
-        bus.add_message_handler(on_signal)
+        await subscribe_kapsule_signals(bus)
+        bus.add_message_handler(make_signal_handler(collector))
 
-        await bus.call(
-            Message(
-                destination="org.freedesktop.DBus",
-                path="/org/freedesktop/DBus",
-                interface="org.freedesktop.DBus",
-                member="AddMatch",
-                signature="s",
-                body=[f"type='signal',sender='{DBUS_NAME}'"],
-            )
-        )
+        # Create the first container successfully
+        first_op = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        success, _ = await wait_for_completed(collector, first_op)
+        assert success is True, "First create should succeed"
 
-        # Create first container
-        await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
-        await asyncio.sleep(10)
+        # Attempt duplicate — should return an op path that fails
+        dup_op = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
+        success, message = await wait_for_completed(collector, dup_op)
 
-        # Try to create duplicate - should fail
-        # (behavior depends on implementation - might fail at call or via signal)
-        try:
-            await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
-            await asyncio.sleep(5)
-
-            # If it didn't raise, check if operation failed via signal
-            failed_ops = [
-                op for op in collector.operation_removed
-                if op[1] is False  # success=False
-            ]
-            assert len(failed_ops) > 0, "Duplicate create should have failed"
-        except RuntimeError:
-            # Expected - immediate failure is fine too
-            pass
+        assert success is False, "Duplicate create should fail"
+        assert message, "Error message for duplicate should not be empty"

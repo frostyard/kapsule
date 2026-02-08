@@ -124,29 +124,63 @@ run_shell_tests() {
 
 run_python_tests() {
     log_info "Running Python-based integration tests..."
-    
-    # Copy Python tests to VM
-    local remote_test_dir="/tmp/kapsule-tests"
-    ssh_vm "rm -rf $remote_test_dir && mkdir -p $remote_test_dir"
-    
-    # Copy test files
-    scp_to_vm "$SCRIPT_DIR/conftest.py" "$remote_test_dir/" 2>/dev/null || true
-    scp_to_vm "$SCRIPT_DIR/test_"*.py "$remote_test_dir/" 2>/dev/null || true
-    
-    # Check if we have Python tests
-    if ! ssh_vm "ls $remote_test_dir/test_*.py" &>/dev/null; then
+
+    # Check for local Python test files
+    local test_files=("$SCRIPT_DIR"/test_*.py)
+    if [[ ! -f "${test_files[0]}" ]]; then
         log_info "No Python tests found, skipping"
         return 0
     fi
-    
-    # Run pytest on VM
+
+    # Activate the project venv if present
+    if [[ -f "$PROJECT_ROOT/.venv/bin/activate" ]]; then
+        # shellcheck disable=SC1091
+        source "$PROJECT_ROOT/.venv/bin/activate"
+    fi
+
+    # Check local pytest is available
+    if ! python3 -m pytest --version &>/dev/null; then
+        log_skip "Python tests (pytest not installed locally)"
+        return 0
+    fi
+
+    # Set up an SSH tunnel for the VM's D-Bus system bus.
+    # dbus-fast honours DBUS_SYSTEM_BUS_ADDRESS, so tests connect
+    # through the forwarded socket transparently.
+    local dbus_sock="/tmp/kapsule-test-dbus-$$.sock"
+    rm -f "$dbus_sock"
+
+    log_info "Opening SSH tunnel for D-Bus system bus..."
+    ssh $SSH_OPTS -fNT \
+        -L "$dbus_sock:/run/dbus/system_bus_socket" \
+        "$TEST_VM"
+    local ssh_tunnel_pid=$!
+
+    # Give the tunnel a moment to establish
+    sleep 1
+
+    if [[ ! -S "$dbus_sock" ]]; then
+        echo -e "${RED}ERROR: D-Bus tunnel socket was not created${NC}"
+        kill "$ssh_tunnel_pid" 2>/dev/null || true
+        log_fail "Python tests (tunnel setup)"
+        return 0
+    fi
+
+    # Run pytest locally, pointing D-Bus at the tunnel and passing
+    # the VM address so tests can run incus commands over SSH.
     echo ""
-    log_info "Running pytest on VM..."
-    if ssh_vm "cd $remote_test_dir && python3 -m pytest -v --tb=short" 2>&1; then
+    log_info "Running pytest locally (D-Bus tunnelled to VM)..."
+    if DBUS_SYSTEM_BUS_ADDRESS="unix:path=$dbus_sock" \
+       KAPSULE_TEST_VM="$TEST_VM" \
+       python3 -m pytest "$SCRIPT_DIR" -v --tb=short 2>&1; then
         log_pass "Python tests"
     else
         log_fail "Python tests"
     fi
+
+    # Tear down the tunnel
+    kill "$ssh_tunnel_pid" 2>/dev/null || true
+    rm -f "$dbus_sock"
 }
 
 # ============================================================================
