@@ -1100,7 +1100,8 @@ class ContainerService:
             progress: Operation reporter
             name: Container name
         """
-        dropin_dir = "/etc/containers/containers.conf.d"
+        parent_dir = "/etc/containers"
+        dropin_dir = f"{parent_dir}/containers.conf.d"
         dropin_file = f"{dropin_dir}/50-kapsule-cgroupfs.conf"
         dropin_content = (
             "# Installed by Kapsule – non-session containers lack a systemd\n"
@@ -1109,10 +1110,13 @@ class ContainerService:
             'cgroup_manager = "cgroupfs"\n'
         )
 
-        try:
-            await self._incus.mkdir(name, dropin_dir, uid=0, gid=0, mode="0755")
-        except IncusError:
-            pass  # Directory might already exist
+        # Create the full directory hierarchy – most images don't ship
+        # with Podman so /etc/containers/ won't exist yet.
+        for d in (parent_dir, dropin_dir):
+            try:
+                await self._incus.mkdir(name, d, uid=0, gid=0, mode="0755")
+            except IncusError:
+                pass  # Directory might already exist
 
         try:
             await self._incus.push_file(
@@ -1120,7 +1124,7 @@ class ContainerService:
                 uid=0, gid=0, mode="0644",
             )
         except IncusError as e:
-            # Not fatal – Podman may not be installed
+            # Not fatal – best-effort config for when Podman is installed later
             progress.warning(f"Could not configure rootless Podman: {e}")
             return
 
