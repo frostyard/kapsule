@@ -54,14 +54,17 @@ void KapsuleClientPrivate::connectToDaemon()
         QDBusConnection::systemBus()
     );
 
-    if (interface->isValid()) {
-        connected = true;
-        daemonVersion = interface->version();
-        qCDebug(KAPSULE_LOG) << "Connected to kapsule-daemon version" << daemonVersion;
-    } else {
+    // Read a property instead of checking isValid() — an actual D-Bus call
+    // triggers bus activation so the daemon starts via systemd if needed.
+    daemonVersion = interface->version();
+
+    if (interface->lastError().isValid()) {
         qCWarning(KAPSULE_LOG) << "Failed to connect to kapsule-daemon:"
                                << interface->lastError().message();
         connected = false;
+    } else {
+        connected = true;
+        qCDebug(KAPSULE_LOG) << "Connected to kapsule-daemon version" << daemonVersion;
     }
 }
 
