@@ -10,6 +10,7 @@ Provides the org.kde.kapsule.Manager interface for container management.
 from __future__ import annotations
 
 import contextvars
+import logging
 from typing import Annotated
 
 from dbus_fast.aio import MessageBus
@@ -30,7 +31,9 @@ from . import __version__
 from .container_service import ContainerService
 
 # Re-export IncusClient for use in __main__ and CLI
-from .incus_client import IncusClient
+from .incus_client import IncusClient, IncusError
+
+logger = logging.getLogger(__name__)
 
 # Context variable to store the current D-Bus message sender
 # This is set by a message handler before method dispatch
@@ -450,6 +453,9 @@ class KapsuleService:
         # Create Incus client
         self._incus = IncusClient(socket_path=self._socket_path)
 
+        # Ensure Incus is initialized with the storage pool we need
+        await self._ensure_storage_pool()
+
         # Create the interface and container service
         # The interface needs the service, and the service needs the interface
         # So we use deferred initialization
@@ -496,6 +502,33 @@ class KapsuleService:
         if self._bus:
             self._bus.disconnect()
             self._bus = None
+
+    async def _ensure_storage_pool(self) -> None:
+        """Ensure the 'default' btrfs storage pool exists.
+
+        KDE Linux uses btrfs for container storage.  If Incus has not
+        been initialised yet (first boot, sysext update, etc.) the pool
+        will be missing.  We create it here so that every subsequent
+        operation can assume it exists.
+
+        This is fatal — without a storage pool nothing will work.
+        """
+        assert self._incus is not None
+        if await self._incus.storage_pool_exists("default"):
+            logger.info("Storage pool 'default' already exists")
+            return
+
+        logger.info("Creating btrfs storage pool 'default'...")
+        try:
+            await self._incus.create_storage_pool(
+                name="default",
+                driver="btrfs",
+                config={"source": "/var/lib/incus/storage-pools/default"},
+            )
+        except IncusError as e:
+            logger.error("Failed to create storage pool 'default': %s", e)
+            raise
+        logger.info("Storage pool 'default' created")
 
     @property
     def container_service(self) -> ContainerService | None:
