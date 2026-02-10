@@ -25,11 +25,6 @@ if TYPE_CHECKING:
 # Import Incus client and models from local modules
 from .incus_client import IncusClient, IncusError
 from .models_generated import InstanceSource, InstancesPost
-from .profile import (
-    KAPSULE_PROFILE_NAME,
-    ProfileSyncResult,
-    ensure_kapsule_profile,
-)
 
 
 # Config keys for kapsule metadata stored in container config
@@ -55,6 +50,51 @@ _ENTER_ENV_SKIP = frozenset({
     "LESS_TERMCAP_mb", "LESS_TERMCAP_md", "LESS_TERMCAP_me",  # Less colors
     "LESS_TERMCAP_se", "LESS_TERMCAP_so", "LESS_TERMCAP_ue", "LESS_TERMCAP_us",
 })
+
+
+def _base_container_config() -> dict[str, str]:
+    """Base Incus config applied to every new Kapsule container.
+
+    Returns:
+        Config dict with security and networking settings.
+    """
+    return {
+        # In a future version, we might investigate what
+        # we can do with unprivileged containers.
+        "security.privileged": "true",
+        "security.nesting": "true",
+        # Use host networking
+        "raw.lxc": "lxc.net.0.type=none\n",
+    }
+
+
+def _base_container_devices() -> dict[str, dict[str, str]]:
+    """Base Incus devices applied to every new Kapsule container.
+
+    Returns:
+        Devices dict with root disk, GPU passthrough, and host filesystem mount.
+    """
+    return {
+        # Root disk - required for container storage
+        "root": {
+            "type": "disk",
+            "path": "/",
+            "pool": "default",
+        },
+        # GPU passthrough
+        "gpu": {
+            "type": "gpu",
+        },
+        # Mount the host filesystem at /.kapsule/host
+        "hostfs": {
+            "type": "disk",
+            "source": "/",
+            "path": "/.kapsule/host",
+            "propagation": "rslave",
+            "recursive": "true",
+            "shift": "false",
+        },
+    }
 
 
 class ContainerService:
@@ -126,9 +166,6 @@ class ContainerService:
         if await self._incus.instance_exists(name):
             raise OperationError(f"Container '{name}' already exists")
 
-        # Ensure profile exists
-        await self._ensure_profile(progress)
-
         progress.info(f"Image: {image}")
 
         # Parse image source
@@ -136,22 +173,22 @@ class ContainerService:
         if instance_source is None:
             raise OperationError(f"Invalid image format: {image}")
 
-        # Build instance config
-        instance_metadata: dict[str, str] = {}
+        # Build instance config — base settings applied directly
+        instance_config_dict = _base_container_config()
         if session_mode:
-            instance_metadata[KAPSULE_SESSION_MODE_KEY] = "true"
+            instance_config_dict[KAPSULE_SESSION_MODE_KEY] = "true"
         if dbus_mux:
-            instance_metadata[KAPSULE_DBUS_MUX_KEY] = "true"
+            instance_config_dict[KAPSULE_DBUS_MUX_KEY] = "true"
 
         instance_config = InstancesPost(
             name=name,
-            profiles=[KAPSULE_PROFILE_NAME],
+            profiles=[],
             source=instance_source,
             start=True,
             architecture=None,
-            config=instance_metadata if instance_metadata else None,
+            config=instance_config_dict,
             description=None,
-            devices=None,
+            devices=_base_container_devices(),
             ephemeral=None,
             instance_type=None,
             restore=None,
@@ -671,27 +708,21 @@ class ContainerService:
             name: Container name
             image: Image to use
         """
-        # Ensure profile exists
-        try:
-            await ensure_kapsule_profile(self._incus)
-        except IncusError as e:
-            raise OperationError(f"Failed to ensure profile: {e}")
-
         # Parse image source
         instance_source = self._parse_image_source(image)
         if instance_source is None:
             raise OperationError(f"Invalid image format: {image}")
 
-        # Create instance
+        # Create instance — base settings applied directly
         instance_config = InstancesPost(
             name=name,
-            profiles=[KAPSULE_PROFILE_NAME],
+            profiles=None,
             source=instance_source,
             start=True,
             architecture=None,
-            config=None,
+            config=_base_container_config(),
             description=None,
-            devices=None,
+            devices=_base_container_devices(),
             ephemeral=None,
             instance_type=None,
             restore=None,
@@ -929,34 +960,6 @@ class ContainerService:
     # -------------------------------------------------------------------------
     # Private Helper Methods
     # -------------------------------------------------------------------------
-
-    async def _ensure_profile(self, progress: OperationReporter) -> None:
-        """Ensure the kapsule profile exists and is up to date."""
-        progress.info(f"Ensuring profile: {KAPSULE_PROFILE_NAME}")
-        sub = progress.indented()
-
-        try:
-            result = await ensure_kapsule_profile(self._incus)
-            match result:
-                case ProfileSyncResult.CREATED:
-                    sub.success(f"Created profile '{KAPSULE_PROFILE_NAME}'")
-                case ProfileSyncResult.UPDATED:
-                    sub.success(f"Updated profile '{KAPSULE_PROFILE_NAME}'")
-                case ProfileSyncResult.UNCHANGED:
-                    sub.dim(f"Profile '{KAPSULE_PROFILE_NAME}' is up to date")
-        except IncusError as e:
-            raise OperationError(f"Failed to ensure profile: {e}")
-
-    async def sync_profile(self) -> ProfileSyncResult:
-        """Sync the kapsule profile on daemon startup.
-
-        Creates the profile if missing, or updates it if the content
-        hash differs from the current profile definition.
-
-        Returns:
-            ProfileSyncResult indicating what action was taken.
-        """
-        return await ensure_kapsule_profile(self._incus)
 
     def _parse_image_source(self, image: str) -> InstanceSource | None:
         """Parse an image string into an InstanceSource.

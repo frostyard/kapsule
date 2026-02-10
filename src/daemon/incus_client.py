@@ -23,9 +23,6 @@ from .models_generated import (
     InstancesPost,
     InstanceStatePut,
     Operation,
-    Profile,
-    ProfilePut,
-    ProfilesPost,
     Server,
     ServerPut,
     StoragePool,
@@ -210,7 +207,7 @@ class IncusClient:
         """
         instances = await self.list_instances(recursion=1)
 
-        containers = []
+        containers: list[ContainerInfo] = []
         for inst in instances:
             # Extract image description from config
             image_desc = "unknown"
@@ -258,68 +255,6 @@ class IncusClient:
             return True
         except Exception:
             return False
-
-    # -------------------------------------------------------------------------
-    # Profile operations
-    # -------------------------------------------------------------------------
-
-    async def list_profiles(self) -> list[str]:
-        """List all profile names.
-
-        Returns:
-            List of profile names.
-        """
-        result = await self._request("GET", "/1.0/profiles", response_type=StringList)
-        # Returns URLs like ["/1.0/profiles/default", "/1.0/profiles/foo"]
-        return [url.split("/")[-1] for url in result.root]
-
-    async def get_profile(self, name: str) -> Profile:
-        """Get a profile by name.
-
-        Args:
-            name: Profile name.
-
-        Returns:
-            Profile object.
-        """
-        return await self._request("GET", f"/1.0/profiles/{name}", response_type=Profile)
-
-    async def profile_exists(self, name: str) -> bool:
-        """Check if a profile exists.
-
-        Args:
-            name: Profile name.
-
-        Returns:
-            True if the profile exists.
-        """
-        profiles = await self.list_profiles()
-        return name in profiles
-
-    async def create_profile(self, profile: ProfilesPost) -> None:
-        """Create a new profile.
-
-        Args:
-            profile: Profile configuration.
-        """
-        await self._request(
-            "POST", "/1.0/profiles",
-            response_type=EmptyResponse,
-            json=profile.model_dump(exclude_none=True),
-        )
-
-    async def update_profile(self, name: str, profile_put: ProfilePut) -> None:
-        """Update an existing profile.
-
-        Args:
-            name: Profile name.
-            profile_put: New profile configuration.
-        """
-        await self._request(
-            "PUT", f"/1.0/profiles/{name}",
-            response_type=EmptyResponse,
-            json=profile_put.model_dump(exclude_none=True),
-        )
 
     # -------------------------------------------------------------------------
     # Instance creation
@@ -776,44 +711,6 @@ class IncusClient:
         put_data = ServerPut(config=new_config)
         await self._request(
             "PUT", "/1.0",
-            response_type=EmptyResponse,
-            json=put_data.model_dump(exclude_none=True),
-        )
-
-    # -------------------------------------------------------------------------
-    # Profile device operations
-    # -------------------------------------------------------------------------
-
-    async def add_profile_device(
-        self,
-        profile_name: str,
-        device_name: str,
-        device_config: dict[str, str],
-    ) -> None:
-        """Add a device to a profile.
-
-        Args:
-            profile_name: Profile name.
-            device_name: Name for the device.
-            device_config: Device configuration (type, path, pool, etc.).
-        """
-        # Get current profile
-        profile = await self.get_profile(profile_name)
-        current_devices = profile.devices or {}
-
-        # Add/update the device
-        merged_devices = {**current_devices, device_name: device_config}
-
-        # Use PUT with merged devices
-        put_data = ProfilePut(
-            config=profile.config,
-            description=profile.description,
-            devices=merged_devices,
-        )
-
-        await self._request(
-            "PUT",
-            f"/1.0/profiles/{profile_name}",
             response_type=EmptyResponse,
             json=put_data.model_dump(exclude_none=True),
         )

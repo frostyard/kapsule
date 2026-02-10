@@ -91,7 +91,6 @@ src/daemon/
 ├── operations.py        # @operation decorator, progress reporting
 ├── incus_client.py      # Typed async Incus REST client
 ├── models_generated.py  # Pydantic models from Incus OpenAPI spec
-├── profile.py           # Kapsule container profile definition
 ├── config.py            # User configuration handling
 └── dbus_types.py        # D-Bus type annotations
 ```
@@ -279,9 +278,11 @@ o.hint("Is the daemon running? Try: systemctl status kapsule-daemon");
 
 ---
 
-## Container Profile
+## Container Configuration
 
-Kapsule containers use a custom Incus profile (`kapsule-base`) that enables:
+Kapsule applies configuration directly to each container at creation time
+(rather than via a shared Incus profile) so that changes to defaults never
+affect existing containers.
 
 ### Security Settings
 ```yaml
@@ -292,7 +293,6 @@ raw.lxc: "lxc.net.0.type=none"  # Host networking
 
 ### Devices
 - **root**: Container root filesystem
-- **x11**: X11 socket passthrough (`/tmp/.X11-unix`)
 - **gpu**: GPU passthrough for graphics
 - **hostfs**: Host filesystem at `/.kapsule/host` (for tooling access)
 

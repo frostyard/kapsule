@@ -84,7 +84,6 @@ if(INSTALL_PYTHON_DAEMON)
         src/daemon/incus_client.py
         src/daemon/models_generated.py
         src/daemon/operations.py
-        src/daemon/profile.py
         src/daemon/service.py
         DESTINATION "${KAPSULE_PYTHON_DIR}/kapsule/daemon"
     )
