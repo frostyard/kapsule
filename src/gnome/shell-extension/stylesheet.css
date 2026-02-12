@@ -1,0 +1,11 @@
+.kapsule-container-item {
+    padding: 4px 8px;
+}
+
+.kapsule-status-running {
+    color: #57e389;
+}
+
+.kapsule-status-stopped {
+    color: #ff7b63;
+}
