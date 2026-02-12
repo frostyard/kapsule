@@ -27,19 +27,19 @@ Kapsule is an Incus-based container manager with native KDE/Plasma integration, 
 │                          └────────┬────────┘                                 │
 └───────────────────────────────────┼──────────────────────────────────────────┘
                                     │ D-Bus (system bus)
-                                    │ org.kde.kapsule
+                                    │ org.frostyard.Kapsule
 ┌───────────────────────────────────▼─────────────────────────────────────────┐
 │                        kapsule-daemon (Python)                              │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ org.kde.kapsule.Manager                                             │   │
+│   │ org.frostyard.Kapsule.Manager                                             │   │
 │   │ ├── Properties: Version                                             │   │
 │   │ └── Methods: CreateContainer, DeleteContainer, StartContainer, ...  │   │
 │   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ org.kde.kapsule.Operation (per-operation objects)                   │   │
-│   │ Path: /org/kde/kapsule/operations/{id}                              │   │
+│   │ org.frostyard.Kapsule.Operation (per-operation objects)                   │   │
+│   │ Path: /org/frostyard/Kapsule/operations/{id}                              │   │
 │   │ ├── Properties: Id, Type, Description, Target, Status               │   │
 │   │ ├── Signals: Message, ProgressStarted, ProgressUpdate, ...          │   │
 │   │ └── Methods: Cancel                                                 │   │
@@ -99,9 +99,9 @@ src/daemon/
 
 The daemon exposes two interface types:
 
-#### Manager Interface (`org.kde.kapsule.Manager`)
+#### Manager Interface (`org.frostyard.Kapsule.Manager`)
 
-Singleton service at `/org/kde/kapsule`:
+Singleton service at `/org/frostyard/Kapsule`:
 
 ```python
 # Methods - return operation object path immediately
@@ -114,9 +114,9 @@ StopContainer(name: str, force: bool) -> object_path
 Version: str
 ```
 
-#### Operation Interface (`org.kde.kapsule.Operation`)
+#### Operation Interface (`org.frostyard.Kapsule.Operation`)
 
-Per-operation objects at `/org/kde/kapsule/operations/{id}`:
+Per-operation objects at `/org/frostyard/Kapsule/operations/{id}`:
 
 ```python
 # Properties
@@ -160,7 +160,7 @@ async def create_container(
 
 The decorator:
 1. Creates an `OperationInterface` D-Bus object
-2. Exports it at `/org/kde/kapsule/operations/{id}`
+2. Exports it at `/org/frostyard/Kapsule/operations/{id}`
 3. Returns the object path immediately to the caller
 4. Runs the operation async in the background
 5. Emits progress signals as work progresses
@@ -310,7 +310,7 @@ When entering a container, Kapsule:
 
 ### D-Bus Configuration
 
-`/usr/share/dbus-1/system.d/org.kde.kapsule.conf`:
+`/usr/share/dbus-1/system.d/org.frostyard.Kapsule.conf`:
 - Root owns the service name
 - All users can call methods (Polkit handles authorization)
 

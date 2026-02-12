@@ -10,8 +10,8 @@ This script creates the introspection XML by parsing the Python source files
 using AST, without importing them (avoiding dbus-fast dependency at build time).
 
 Usage:
-    python generate_dbus_introspection.py > org.kde.kapsule.xml
-    python generate_dbus_introspection.py --output org.kde.kapsule.xml
+    python generate_dbus_introspection.py > org.frostyard.Kapsule.xml
+    python generate_dbus_introspection.py --output org.frostyard.Kapsule.xml
 """
 
 from __future__ import annotations
@@ -511,8 +511,8 @@ def generate_interface_xml(
     """Generate D-Bus introspection XML for a single interface.
     
     Args:
-        interface_name: Full D-Bus interface name (e.g., "org.kde.kapsule.Operation")
-        object_path: D-Bus object path (e.g., "/org/kde/kapsule/operations")
+        interface_name: Full D-Bus interface name (e.g., "org.frostyard.Kapsule.Operation")
+        object_path: D-Bus object path (e.g., "/org/frostyard/Kapsule/operations")
         methods: List of methods
         signals: List of signals
         properties: List of properties
@@ -615,10 +615,10 @@ def main() -> int:
             args.service_path, "KapsuleManagerInterface"
         )
         manager_xml = generate_interface_xml(
-            "org.kde.kapsule.Manager",
-            "/org/kde/kapsule",
+            "org.frostyard.Kapsule.Manager",
+            "/org/frostyard/Kapsule",
             methods, signals, properties,
-            "D-Bus Introspection XML for org.kde.kapsule.Manager",
+            "D-Bus Introspection XML for org.frostyard.Kapsule.Manager",
         )
         
         if args.output:
@@ -633,10 +633,10 @@ def main() -> int:
                 args.operations_path, "OperationInterface"
             )
             operation_xml = generate_interface_xml(
-                "org.kde.kapsule.Operation",
-                "/org/kde/kapsule/operations",
+                "org.frostyard.Kapsule.Operation",
+                "/org/frostyard/Kapsule/operations",
                 op_methods, op_signals, op_properties,
-                "D-Bus Introspection XML for org.kde.kapsule.Operation",
+                "D-Bus Introspection XML for org.frostyard.Kapsule.Operation",
             )
             args.operation_output.write_text(operation_xml)
             print(f"Generated {args.operation_output}", file=sys.stderr)

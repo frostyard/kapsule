@@ -4,7 +4,7 @@
 
 """D-Bus service implementation for Kapsule.
 
-Provides the org.kde.kapsule.Manager interface for container management.
+Provides the org.frostyard.Kapsule.Manager interface for container management.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ _current_sender: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 
 class KapsuleManagerInterface(ServiceInterface):
-    """org.kde.kapsule.Manager D-Bus interface.
+    """org.frostyard.Kapsule.Manager D-Bus interface.
 
     This interface provides:
     - Container lifecycle management (create, delete, start, stop)
@@ -55,7 +55,7 @@ class KapsuleManagerInterface(ServiceInterface):
     """
 
     def __init__(self, container_service: ContainerService, bus: MessageBus | None = None):
-        super().__init__("org.kde.kapsule.Manager")
+        super().__init__("org.frostyard.Kapsule.Manager")
         self._service = container_service
         self._version = __version__
         self._bus = bus
@@ -69,7 +69,7 @@ class KapsuleManagerInterface(ServiceInterface):
         """
         # Create instance without calling __init__
         instance = cls.__new__(cls)
-        ServiceInterface.__init__(instance, "org.kde.kapsule.Manager")
+        ServiceInterface.__init__(instance, "org.frostyard.Kapsule.Manager")
         instance._version = __version__
         instance._bus = bus
         instance._service = None  # type: ignore[assignment]
@@ -468,7 +468,7 @@ class KapsuleService:
         self._interface = temp_interface
 
         # Export the interface
-        self._bus.export("/org/kde/kapsule", self._interface)
+        self._bus.export("/org/frostyard/Kapsule", self._interface)
 
         # Add message handler to capture sender for credential verification
         def capture_sender(msg: Message) -> bool | None:
@@ -480,12 +480,12 @@ class KapsuleService:
         self._bus.add_message_handler(capture_sender)
 
         # Request the well-known name
-        await self._bus.request_name("org.kde.kapsule")
+        await self._bus.request_name("org.frostyard.Kapsule")
 
         bus_name = "system" if self._bus_type == BusType.SYSTEM else "session"
         print(f"Kapsule daemon v{__version__} running on {bus_name} bus")
-        print("Service: org.kde.kapsule")
-        print("Object:  /org/kde/kapsule")
+        print("Service: org.frostyard.Kapsule")
+        print("Object:  /org/frostyard/Kapsule")
 
     async def run(self) -> None:
         """Run the service until disconnected."""

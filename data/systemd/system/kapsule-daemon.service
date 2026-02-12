@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2024-2026 KDE Community
+# SPDX-FileCopyrightText: 2024-2026 Frostyard
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Kapsule D-Bus daemon - system service
@@ -12,7 +12,7 @@ Wants=incus.service
 
 [Service]
 Type=dbus
-BusName=org.kde.kapsule
+BusName=org.frostyard.Kapsule
 ExecStart=@PYTHON_EXECUTABLE@ -m kapsule.daemon --system
 Restart=on-failure
 RestartSec=5

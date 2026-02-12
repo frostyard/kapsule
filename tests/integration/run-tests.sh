@@ -83,7 +83,7 @@ deploy_sysext() {
     log_info "Waiting for kapsule-daemon to be ready..."
     local retries=10
     while ((retries > 0)); do
-        if ssh_vm "busctl status org.kde.kapsule" &>/dev/null; then
+        if ssh_vm "busctl status org.frostyard.Kapsule" &>/dev/null; then
             log_info "Daemon is ready"
             return 0
         fi

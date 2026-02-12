@@ -8,8 +8,8 @@ These tests verify that D-Bus signals are emitted correctly during
 long-running operations like container creation.
 
 The daemon exposes operations as D-Bus objects at
-/org/kde/kapsule/operations/{id}.  Each object implements the
-org.kde.kapsule.Operation interface which emits:
+/org/frostyard/Kapsule/operations/{id}.  Each object implements the
+org.frostyard.Kapsule.Operation interface which emits:
 
     Message(message_type: i, message: s, indent_level: i)
     ProgressStarted(progress_id: s, description: s, total: i, indent: i)
@@ -17,7 +17,7 @@ org.kde.kapsule.Operation interface which emits:
     ProgressCompleted(progress_id: s, success: b, message: s)
     Completed(success: b, message: s)
 
-The root object at /org/kde/kapsule implements
+The root object at /org/frostyard/Kapsule implements
 org.freedesktop.DBus.ObjectManager, so InterfacesAdded /
 InterfacesRemoved signals fire when operations are exported /
 unexported.
@@ -35,9 +35,9 @@ from dbus_fast import BusType, Message, MessageType
 from conftest import ssh_run_on_vm
 
 
-DBUS_NAME = "org.kde.kapsule"
-DBUS_PATH = "/org/kde/kapsule"
-DBUS_INTERFACE = "org.kde.kapsule.Manager"
+DBUS_NAME = "org.frostyard.Kapsule"
+DBUS_PATH = "/org/frostyard/Kapsule"
+DBUS_INTERFACE = "org.frostyard.Kapsule.Manager"
 
 CONTAINER_NAME = "test-signals"
 TEST_IMAGE = "images:alpine/edge"
@@ -227,7 +227,7 @@ class TestOperationSignals:
         bus.add_message_handler(make_signal_handler(collector))
 
         op_path = await call_create_container(bus, CONTAINER_NAME, TEST_IMAGE)
-        assert op_path.startswith("/org/kde/kapsule/operations/")
+        assert op_path.startswith("/org/frostyard/Kapsule/operations/")
 
         # Wait for the operation to finish
         await wait_for_completed(collector, op_path)
@@ -238,7 +238,7 @@ class TestOperationSignals:
             if path == op_path
         ]
         assert len(our_adds) >= 1, "No InterfacesAdded for our operation"
-        assert "org.kde.kapsule.Operation" in our_adds[0][1]
+        assert "org.frostyard.Kapsule.Operation" in our_adds[0][1]
 
     async def test_completed_signal_on_success(
         self, bus: MessageBus, collector: SignalCollector

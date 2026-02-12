@@ -8,7 +8,7 @@ Provides decorators and utilities for daemon operations that emit
 progress signals over D-Bus.
 
 Each operation is exposed as a separate D-Bus object at
-/org/kde/kapsule/operations/{id}. This allows clients to:
+/org/frostyard/Kapsule/operations/{id}. This allows clients to:
 - Subscribe to signals for only the operations they care about
 - Avoid race conditions by getting the object path before work starts
 - Cancel operations via a method call
@@ -76,16 +76,16 @@ class OperationInterface(ServiceInterface):
     """D-Bus interface for a single operation.
 
     Each running operation gets its own D-Bus object at
-    /org/kde/kapsule/operations/{uuid}. This allows clients to:
+    /org/frostyard/Kapsule/operations/{uuid}. This allows clients to:
     - Subscribe to signals for just this operation
     - Cancel the operation
     - Query operation status
 
-    The interface is: org.kde.kapsule.Operation
+    The interface is: org.frostyard.Kapsule.Operation
     """
 
     def __init__(self, op_id: str, op_type: str, description: str, target: str):
-        super().__init__("org.kde.kapsule.Operation")
+        super().__init__("org.frostyard.Kapsule.Operation")
         self._op_id = op_id
         self._op_type = op_type
         self._description = description
@@ -97,7 +97,7 @@ class OperationInterface(ServiceInterface):
     @property
     def object_path(self) -> str:
         """Get the D-Bus object path for this operation."""
-        return f"/org/kde/kapsule/operations/{self._op_id}"
+        return f"/org/frostyard/Kapsule/operations/{self._op_id}"
 
     def set_task(self, task: asyncio.Task[None]) -> None:
         """Set the asyncio task for this operation (for cancellation)."""
@@ -527,7 +527,7 @@ def operation(
 
     Wraps an async method to:
     - Generate a unique operation ID
-    - Create a D-Bus object for the operation at /org/kde/kapsule/operations/{id}
+    - Create a D-Bus object for the operation at /org/frostyard/Kapsule/operations/{id}
     - Inject an OperationReporter as the first parameter (after self)
     - Run the operation in a background task
     - Return the D-Bus object path immediately (client subscribes to signals)
@@ -551,7 +551,7 @@ def operation(
             ...
 
     Returns:
-        The D-Bus object path: /org/kde/kapsule/operations/{id}
+        The D-Bus object path: /org/frostyard/Kapsule/operations/{id}
     """
 
     def decorator(
