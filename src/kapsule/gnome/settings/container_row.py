@@ -64,13 +64,16 @@ class ContainerRow(Adw.ActionRow):
         delete_btn.connect("clicked", self._on_delete)
         self.add_suffix(delete_btn)
 
-    def _run_async(self, coro):
+    def _run_async(self, coro, refresh_delay: float = 1.5):
         def run():
             loop = asyncio.new_event_loop()
             try:
                 loop.run_until_complete(coro)
                 if self._on_action:
-                    GLib.idle_add(self._on_action)
+                    GLib.timeout_add(
+                        int(refresh_delay * 1000),
+                        self._on_action,
+                    )
             finally:
                 loop.close()
         threading.Thread(target=run, daemon=True).start()

@@ -24,7 +24,7 @@ class KapsuleWindow(Adw.ApplicationWindow):
         super().__init__(**kwargs)
 
         self.set_title("Kapsule")
-        self.set_default_size(600, 400)
+        self.set_default_size(600, 500)
 
         self._build_ui()
         self._refresh()
@@ -55,7 +55,7 @@ class KapsuleWindow(Adw.ApplicationWindow):
         self._stack = Gtk.Stack()
         self._stack.add_named(self._status_page, "empty")
 
-        scrolled = Gtk.ScrolledWindow(child=self._list_box)
+        scrolled = Gtk.ScrolledWindow(child=self._list_box, vexpand=True)
         self._stack.add_named(scrolled, "list")
 
         clamp = Adw.Clamp(child=self._stack, maximum_size=600)
