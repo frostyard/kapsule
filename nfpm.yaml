@@ -1,0 +1,91 @@
+name: kapsule
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+maintainer: Frostyard
+description: Incus-based container management with GNOME integration
+vendor: Frostyard
+homepage: https://github.com/frostyard/kapsule
+license: GPL-3.0-or-later
+
+depends:
+  - python3 (>= 3.11)
+  - python3-gi
+  - gir1.2-adw-1
+  - gir1.2-gtk-4.0
+
+recommends:
+  - incus
+  - ptyxis
+
+scripts:
+  postinstall: scripts/postinstall.sh
+  postremove: scripts/postremove.sh
+
+contents:
+  # Vendored Python venv
+  - src: build/staging/usr/lib/kapsule/
+    dst: /usr/lib/kapsule/
+    type: tree
+
+  # Wrapper scripts
+  - src: build/staging/usr/bin/kapsule
+    dst: /usr/bin/kapsule
+    file_info:
+      mode: 0755
+  - src: build/staging/usr/bin/kapsule-daemon
+    dst: /usr/bin/kapsule-daemon
+    file_info:
+      mode: 0755
+  - src: build/staging/usr/bin/kapsule-settings
+    dst: /usr/bin/kapsule-settings
+    file_info:
+      mode: 0755
+  - src: kapsule
+    dst: /usr/bin/kap
+    type: symlink
+
+  # D-Bus
+  - src: data/dbus/system/org.frostyard.Kapsule.conf
+    dst: /etc/dbus-1/system.d/org.frostyard.Kapsule.conf
+    type: config
+  - src: data/dbus/system/org.frostyard.Kapsule.service
+    dst: /usr/share/dbus-1/system-services/org.frostyard.Kapsule.service
+
+  # Systemd (resolved unit from staging, static files from repo)
+  - src: build/staging/usr/lib/systemd/system/kapsule-daemon.service
+    dst: /usr/lib/systemd/system/kapsule-daemon.service
+  - src: data/systemd/system-preset/50-kapsule.preset
+    dst: /usr/lib/systemd/system-preset/50-kapsule.preset
+  - src: data/systemd/system/incus.service.d/kapsule-log-dir.conf
+    dst: /usr/lib/systemd/system/incus.service.d/kapsule-log-dir.conf
+  - src: data/systemd/system/incus.socket.d/kapsule-socket-group.conf
+    dst: /usr/lib/systemd/system/incus.socket.d/kapsule-socket-group.conf
+  - src: data/systemd/system/incus-user.socket.d/kapsule-socket-mode.conf
+    dst: /usr/lib/systemd/system/incus-user.socket.d/kapsule-socket-mode.conf
+
+  # Modules
+  - src: data/modules-load.d/kapsule.conf
+    dst: /usr/lib/modules-load.d/kapsule.conf
+
+  # Config
+  - src: data/kapsule.conf
+    dst: /etc/kapsule.conf
+    type: config
+
+  # GNOME Shell extension
+  - src: src/gnome/shell-extension/extension.js
+    dst: /usr/share/gnome-shell/extensions/kapsule@frostyard.org/extension.js
+  - src: src/gnome/shell-extension/metadata.json
+    dst: /usr/share/gnome-shell/extensions/kapsule@frostyard.org/metadata.json
+  - src: src/gnome/shell-extension/stylesheet.css
+    dst: /usr/share/gnome-shell/extensions/kapsule@frostyard.org/stylesheet.css
+
+  # Nautilus extension
+  - src: src/gnome/nautilus/kapsule-nautilus.py
+    dst: /usr/share/nautilus-python/extensions/kapsule-nautilus.py
+
+  # Desktop file
+  - src: data/applications/org.frostyard.Kapsule.desktop
+    dst: /usr/share/applications/org.frostyard.Kapsule.desktop
