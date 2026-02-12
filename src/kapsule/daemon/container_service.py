@@ -219,6 +219,18 @@ class ContainerService:
             # rootless Podman's default cgroup_manager=systemd will fail.
             await self._configure_rootless_podman(progress, name)
 
+        # Create Ptyxis terminal profile
+        from .ptyxis import create_ptyxis_profile
+        profile_uuid = create_ptyxis_profile(name)
+        if profile_uuid:
+            try:
+                await self._incus.patch_instance_config(
+                    name, {"user.kapsule.ptyxis-profile": profile_uuid}
+                )
+                progress.dim(f"Ptyxis profile created")
+            except Exception:
+                pass  # Non-fatal
+
         progress.success(f"Container '{name}' created successfully")
 
     @operation(
@@ -245,6 +257,13 @@ class ContainerService:
             raise OperationError(f"Container '{name}' does not exist")
 
         instance = await self._incus.get_instance(name)
+
+        # Clean up Ptyxis profile before deletion
+        profile_uuid = (instance.config or {}).get("user.kapsule.ptyxis-profile")
+        if profile_uuid:
+            from .ptyxis import delete_ptyxis_profile
+            delete_ptyxis_profile(profile_uuid)
+
         is_running = instance.status and instance.status.lower() == "running"
 
         if is_running and not force:
