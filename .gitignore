@@ -7,6 +7,7 @@ arch-container
 .cache
 
 **/__pycache__/
-compile_commands.json
 *.egg-info
+build/
+dist/
 .worktrees

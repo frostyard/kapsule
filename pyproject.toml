@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 none
+# SPDX-FileCopyrightText: 2026 Frostyard
 #
 # SPDX-License-Identifier: CC0-1.0
 
@@ -9,20 +9,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kapsule"
 version = "0.1.0"
-description = "Incus-based container management with KDE integration"
+description = "Incus-based container management with GNOME integration"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 authors = [
-    {name = "KDE Community", email = "kde-devel@kde.org"}
-]
-maintainers = [
-    {name = "KDE Community", email = "kde-devel@kde.org"}
+    {name = "Frostyard"}
 ]
 keywords = [
     "containers",
     "incus",
     "lxc",
-    "kde",
+    "gnome",
     "distrobox",
     "development",
 ]
@@ -60,21 +57,16 @@ dev = [
 ]
 
 [project.scripts]
-kapsule = "kapsule.main:cli"
-kap = "kapsule.main:cli"
+kapsule = "kapsule.cli:app"
+kap = "kapsule.cli:app"
+kapsule-daemon = "kapsule.daemon.__main__:main"
 
 [project.urls]
-Homepage = "https://invent.kde.org/utilities/kapsule"
-Documentation = "https://docs.kde.org/trunk5/en/kapsule/kapsule/"
-Repository = "https://invent.kde.org/utilities/kapsule.git"
-"Bug Tracker" = "https://bugs.kde.org/enter_bug.cgi?product=kapsule"
+Repository = "https://github.com/frostyard/kapsule"
 
 [tool.setuptools.packages.find]
-where = ["src/cli"]
-include = ["*"]
-
-[tool.setuptools.package-dir]
-kapsule = "src/cli"
+where = ["src"]
+include = ["kapsule*"]
 
 [tool.setuptools.package-data]
 kapsule = ["py.typed"]
@@ -109,7 +101,7 @@ disallow_untyped_defs = true
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
-include = ["src/daemon"]
+include = ["src/kapsule"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
