@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kapsule
+Comment=Manage containers
+Exec=kapsule-settings
+Icon=utilities-terminal
+Categories=System;
+Keywords=containers;incus;

@@ -61,6 +61,9 @@ kapsule = "kapsule.cli:app"
 kap = "kapsule.cli:app"
 kapsule-daemon = "kapsule.daemon.__main__:run"
 
+[project.gui-scripts]
+kapsule-settings = "kapsule.gnome.settings.app:main"
+
 [project.urls]
 Repository = "https://github.com/frostyard/kapsule"
 
