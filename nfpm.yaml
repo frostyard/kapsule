@@ -1,4 +1,4 @@
-name: kapsule
+name: kapsule-gnome
 arch: amd64
 platform: linux
 version: ${VERSION}
