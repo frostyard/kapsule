@@ -9,26 +9,32 @@ Provides the org.frostyard.Kapsule.Manager interface for container management.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import logging
 from typing import Annotated
 
-from dbus_fast.aio import MessageBus
-from dbus_fast.service import ServiceInterface, dbus_property, dbus_method
-from dbus_fast.constants import PropertyAccess
-from dbus_fast.annotations import DBusStr, DBusBool, DBusObjectPath, DBusSignature, DBusUInt32
 from dbus_fast import BusType, Message, MessageType
-
-from .dbus_types import (
-    DBusStrArray,
-    DBusStrDict,
-    DBusContainer,
-    DBusContainerList,
-    DBusEnterResult,
+from dbus_fast.aio import MessageBus
+from dbus_fast.annotations import (
+    DBusBool,
+    DBusObjectPath,
+    DBusSignature,
+    DBusStr,
+    DBusUInt32,
 )
+from dbus_fast.constants import PropertyAccess
+from dbus_fast.service import ServiceInterface, dbus_method, dbus_property
 
 from . import __version__
 from .container_service import ContainerService
+from .dbus_types import (
+    DBusContainer,
+    DBusContainerList,
+    DBusEnterResult,
+    DBusStrArray,
+    DBusStrDict,
+)
 
 # Re-export IncusClient for use in __main__ and CLI
 from .incus_client import IncusClient, IncusError
@@ -54,14 +60,18 @@ class KapsuleManagerInterface(ServiceInterface):
     Progress is reported via signals that clients can subscribe to.
     """
 
-    def __init__(self, container_service: ContainerService, bus: MessageBus | None = None):
+    def __init__(
+        self,
+        container_service: ContainerService,
+        bus: MessageBus | None = None,
+    ):
         super().__init__("org.frostyard.Kapsule.Manager")
         self._service = container_service
         self._version = __version__
         self._bus = bus
 
     @classmethod
-    def create_deferred(cls, bus: MessageBus) -> "KapsuleManagerInterface":
+    def create_deferred(cls, bus: MessageBus) -> KapsuleManagerInterface:
         """Create an interface with deferred service initialization.
 
         Used when the container service needs a reference to this interface.
@@ -109,7 +119,10 @@ class KapsuleManagerInterface(ServiceInterface):
         )
         reply = await self._bus.call(msg)
         if reply.message_type == MessageType.ERROR:
-            raise RuntimeError(f"Failed to get UID: {reply.body[0] if reply.body else 'unknown error'}")
+            error_detail = (
+                reply.body[0] if reply.body else "unknown error"
+            )
+            raise RuntimeError(f"Failed to get UID: {error_detail}")
         uid = reply.body[0]
 
         # Get PID to look up GID and environment
@@ -123,12 +136,15 @@ class KapsuleManagerInterface(ServiceInterface):
         )
         reply = await self._bus.call(msg)
         if reply.message_type == MessageType.ERROR:
-            raise RuntimeError(f"Failed to get PID: {reply.body[0] if reply.body else 'unknown error'}")
+            error_detail = (
+                reply.body[0] if reply.body else "unknown error"
+            )
+            raise RuntimeError(f"Failed to get PID: {error_detail}")
         pid = reply.body[0]
 
         # Read GID from /proc/<pid>/status
         try:
-            with open(f"/proc/{pid}/status", "r") as f:
+            with open(f"/proc/{pid}/status") as f:
                 for line in f:
                     if line.startswith("Gid:"):
                         # Format: "Gid:\treal\teffective\tsaved\tfs"
@@ -158,10 +174,8 @@ class KapsuleManagerInterface(ServiceInterface):
                 for item in data.split(b"\x00"):
                     if b"=" in item:
                         key, _, value = item.partition(b"=")
-                        try:
+                        with contextlib.suppress(UnicodeDecodeError):
                             env[key.decode("utf-8")] = value.decode("utf-8")
-                        except UnicodeDecodeError:
-                            pass  # Skip non-UTF-8 entries
         except (FileNotFoundError, PermissionError):
             pass  # Return empty dict on error
         return env
@@ -216,7 +230,9 @@ class KapsuleManagerInterface(ServiceInterface):
         if not image:
             sender = _current_sender.get()
             if not sender:
-                raise Exception("No image specified and could not determine caller identity")
+                raise Exception(
+                    "No image specified and could not determine caller identity"
+                )
 
             try:
                 uid, _gid, _pid = await self._get_caller_credentials(sender)
@@ -225,7 +241,9 @@ class KapsuleManagerInterface(ServiceInterface):
                 if not actual_image:
                     raise Exception("No image specified and no default_image in config")
             except RuntimeError as e:
-                raise Exception(f"No image specified and failed to read config: {e}")
+                raise Exception(
+                    f"No image specified and failed to read config: {e}"
+                ) from e
 
         return await self._service.create_container(
             name=name,

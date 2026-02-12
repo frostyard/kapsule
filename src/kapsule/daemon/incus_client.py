@@ -10,6 +10,7 @@ communicating over the Unix socket at /var/lib/incus/unix.socket.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Any, TypeVar
 
 import httpx
@@ -17,7 +18,7 @@ from pydantic import BaseModel, RootModel
 
 T = TypeVar("T", bound=BaseModel)
 
-from .models_generated import (
+from .models_generated import (  # noqa: E402
     Instance,
     InstancePut,
     InstancesPost,
@@ -82,10 +83,10 @@ class ContainerInfo(BaseModel):
 
 
 # Module-level singleton instance
-_client: "IncusClient | None" = None
+_client: IncusClient | None = None
 
 
-def get_client() -> "IncusClient":
+def get_client() -> IncusClient:
     """Get the shared IncusClient instance."""
     global _client
     if _client is None:
@@ -118,7 +119,12 @@ class IncusClient:
             self._client = None
 
     async def _request(
-        self, method: str, path: str, *, response_type: type[T], json: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        response_type: type[T],
+        json: dict[str, Any] | None = None,
     ) -> T:
         """Make request and handle Incus response format.
 
@@ -148,14 +154,13 @@ class IncusClient:
         # Handle HTTP errors and convert to IncusError
         if response.status_code >= 400:
             # Try to parse Incus error response
-            try:
+            error_msg = response.reason_phrase
+            error_code = response.status_code
+            with suppress(Exception):
                 data = response.json()
                 error_msg = data.get("error", response.reason_phrase)
                 error_code = data.get("error_code", response.status_code)
-            except Exception:
-                error_msg = response.reason_phrase
-                error_code = response.status_code
-            raise IncusError(error_msg, error_code)
+            raise IncusError(error_msg, error_code) from None
 
         data = response.json()
 
@@ -163,7 +168,7 @@ class IncusClient:
             raise IncusError(
                 data.get("error", "Unknown error"),
                 data.get("error_code"),
-            )
+            ) from None
 
         # For async operations, return the full response
         if data.get("type") == "async":
@@ -242,7 +247,9 @@ class IncusClient:
         Returns:
             Instance object.
         """
-        return await self._request("GET", f"/1.0/instances/{name}", response_type=Instance)
+        return await self._request(
+            "GET", f"/1.0/instances/{name}", response_type=Instance
+        )
 
     async def is_available(self) -> bool:
         """Check if Incus is available and responding.
@@ -250,17 +257,18 @@ class IncusClient:
         Returns:
             True if Incus is available.
         """
-        try:
+        with suppress(Exception):
             await self._request("GET", "/1.0", response_type=Server)
             return True
-        except Exception:
-            return False
+        return False
 
     # -------------------------------------------------------------------------
     # Instance creation
     # -------------------------------------------------------------------------
 
-    async def create_instance(self, instance: InstancesPost, wait: bool = False) -> Operation:
+    async def create_instance(
+        self, instance: InstancesPost, wait: bool = False
+    ) -> Operation:
         """Create a new instance (container or VM).
 
         Args:
@@ -470,7 +478,8 @@ class IncusClient:
         )
 
         if response.status_code >= 400:
-            raise IncusError(f"Failed to push file {path}: {response.text}", response.status_code)
+            error_msg = f"Failed to push file {path}: {response.text}"
+            raise IncusError(error_msg, response.status_code) from None
 
     async def create_symlink(
         self,
@@ -503,7 +512,8 @@ class IncusClient:
         )
 
         if response.status_code >= 400:
-            raise IncusError(f"Failed to create symlink {path}: {response.text}", response.status_code)
+            error_msg = f"Failed to create symlink {path}: {response.text}"
+            raise IncusError(error_msg, response.status_code) from None
 
     async def mkdir(
         self,
@@ -537,7 +547,8 @@ class IncusClient:
         )
 
         if response.status_code >= 400:
-            raise IncusError(f"Failed to create directory {path}: {response.text}", response.status_code)
+            error_msg = f"Failed to create directory {path}: {response.text}"
+            raise IncusError(error_msg, response.status_code) from None
 
     # -------------------------------------------------------------------------
     # Instance configuration
@@ -633,7 +644,9 @@ class IncusClient:
             List of StoragePool objects.
         """
         if recursion == 0:
-            result = await self._request("GET", "/1.0/storage-pools", response_type=StringList)
+            result = await self._request(
+                "GET", "/1.0/storage-pools", response_type=StringList
+            )
             return [
                 StoragePool(
                     name=url.split("/")[-1],
@@ -648,7 +661,9 @@ class IncusClient:
             ]
 
         result = await self._request(
-            "GET", f"/1.0/storage-pools?recursion={recursion}", response_type=StoragePoolList
+            "GET",
+            f"/1.0/storage-pools?recursion={recursion}",
+            response_type=StoragePoolList,
         )
         return result.root
 
@@ -664,7 +679,9 @@ class IncusClient:
         pools = await self.list_storage_pools(recursion=0)
         return any(p.name == name for p in pools)
 
-    async def create_storage_pool(self, name: str, driver: str, config: dict[str, str] | None = None) -> None:
+    async def create_storage_pool(
+        self, name: str, driver: str, config: dict[str, str] | None = None
+    ) -> None:
         """Create a new storage pool.
 
         Args:

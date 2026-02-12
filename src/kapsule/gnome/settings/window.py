@@ -9,9 +9,10 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw, Gio, GLib
+from gi.repository import Adw, GLib, Gtk
 
-from kapsule.client import KapsuleClient, DaemonNotRunning
+from kapsule.client import DaemonNotRunning, KapsuleClient
+
 from .container_row import ContainerRow
 from .create_dialog import CreateDialog
 

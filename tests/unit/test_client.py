@@ -29,7 +29,8 @@ def mock_proxy(mock_iface):
 def mock_bus(mock_proxy):
     bus = MagicMock()
     bus.connected = True
-    bus.get_proxy_object = AsyncMock(return_value=mock_proxy)
+    bus.introspect = AsyncMock(return_value=MagicMock())
+    bus.get_proxy_object = MagicMock(return_value=mock_proxy)
     bus.disconnect = MagicMock()
     return bus
 

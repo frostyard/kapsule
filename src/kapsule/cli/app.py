@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import functools
 import os
-from typing import Optional
 
 import typer
 
-from kapsule.client import KapsuleClient, DaemonNotRunning
-from kapsule.cli.output import print_error, print_success, print_containers, console
+from kapsule.cli.output import console, print_containers, print_error, print_success
+from kapsule.client import DaemonNotRunning, KapsuleClient
 
 app = typer.Typer(
     name="kapsule",
@@ -32,10 +31,10 @@ def handle_errors(func):
             return func(*args, **kwargs)
         except DaemonNotRunning as e:
             print_error(str(e))
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         except Exception as e:
             print_error(str(e))
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
     return wrapper
 
 
@@ -44,8 +43,12 @@ def handle_errors(func):
 def create(
     name: str = typer.Argument(..., help="Container name"),
     image: str = typer.Option("", "--image", "-i", help="Image to use"),
-    session_mode: bool = typer.Option(False, "--session", help="Enable session mode"),
-    dbus_mux: bool = typer.Option(False, "--dbus-mux", help="Enable D-Bus multiplexing"),
+    session_mode: bool = typer.Option(
+        False, "--session", help="Enable session mode"
+    ),
+    dbus_mux: bool = typer.Option(
+        False, "--dbus-mux", help="Enable D-Bus multiplexing"
+    ),
 ):
     """Create a new container."""
     async def _create():
@@ -156,7 +159,7 @@ def remove_alias(
 @app.command()
 @handle_errors
 def config(
-    key: Optional[str] = typer.Argument(None, help="Config key to show"),
+    key: str | None = typer.Argument(None, help="Config key to show"),
 ):
     """Show configuration."""
     async def _config():

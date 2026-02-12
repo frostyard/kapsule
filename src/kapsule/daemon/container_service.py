@@ -19,13 +19,15 @@ from .config import load_config
 from .operations import OperationError, OperationReporter, OperationTracker, operation
 
 if TYPE_CHECKING:
-    from .service import KapsuleManagerInterface
     from dbus_fast.aio import MessageBus
 
+    from .service import KapsuleManagerInterface
+
 # Import Incus client and models from local modules
+import contextlib
+
 from .incus_client import IncusClient, IncusError
 from .models_generated import InstanceSource, InstancesPost
-
 
 # Config keys for kapsule metadata stored in container config
 KAPSULE_SESSION_MODE_KEY = "user.kapsule.session-mode"
@@ -107,7 +109,7 @@ class ContainerService:
 
     def __init__(
         self,
-        interface: "KapsuleManagerInterface",
+        interface: KapsuleManagerInterface,
         incus: IncusClient,
     ):
         """Initialize the container service.
@@ -201,11 +203,13 @@ class ContainerService:
         try:
             operation = await self._incus.create_instance(instance_config, wait=True)
             if operation.status != "Success":
-                raise OperationError(f"Creation failed: {operation.err or operation.status}")
+                err_msg = operation.err or operation.status
+                raise OperationError(f"Creation failed: {err_msg}")
         except IncusError as e:
-            raise OperationError(f"Failed to create container: {e}")
+            raise OperationError(f"Failed to create container: {e}") from e
 
-        # Apply host-networking fixups (mask services that don't work with lxc.net.0.type=none)
+        # Apply host-networking fixups for lxc.net.0.type=none
+        # This masks services that don't work without network interfaces
         await self._apply_host_network_fixups(progress, name)
 
         # Restore file capabilities stripped during image extraction
@@ -227,7 +231,7 @@ class ContainerService:
                 await self._incus.patch_instance_config(
                     name, {"user.kapsule.ptyxis-profile": profile_uuid}
                 )
-                progress.dim(f"Ptyxis profile created")
+                progress.dim("Ptyxis profile created")
             except Exception:
                 pass  # Non-fatal
 
@@ -267,7 +271,9 @@ class ContainerService:
         is_running = instance.status and instance.status.lower() == "running"
 
         if is_running and not force:
-            raise OperationError(f"Container '{name}' is running. Use force=True to remove anyway.")
+            raise OperationError(
+                f"Container '{name}' is running. Use force=True to remove anyway."
+            )
 
         if is_running:
             progress.info("Stopping container...")
@@ -276,7 +282,7 @@ class ContainerService:
                 if op.status != "Success":
                     raise OperationError(f"Failed to stop: {op.err or op.status}")
             except IncusError as e:
-                raise OperationError(f"Failed to stop container: {e}")
+                raise OperationError(f"Failed to stop container: {e}") from e
             progress.success("Container stopped")
 
         progress.info("Deleting container...")
@@ -285,7 +291,7 @@ class ContainerService:
             if op.status != "Success":
                 raise OperationError(f"Deletion failed: {op.err or op.status}")
         except IncusError as e:
-            raise OperationError(f"Failed to delete container: {e}")
+            raise OperationError(f"Failed to delete container: {e}") from e
 
         progress.success(f"Container '{name}' removed successfully")
 
@@ -320,7 +326,7 @@ class ContainerService:
             if op.status != "Success":
                 raise OperationError(f"Start failed: {op.err or op.status}")
         except IncusError as e:
-            raise OperationError(f"Failed to start container: {e}")
+            raise OperationError(f"Failed to start container: {e}") from e
 
         progress.success(f"Container '{name}' started successfully")
 
@@ -357,7 +363,7 @@ class ContainerService:
             if op.status != "Success":
                 raise OperationError(f"Stop failed: {op.err or op.status}")
         except IncusError as e:
-            raise OperationError(f"Failed to stop container: {e}")
+            raise OperationError(f"Failed to stop container: {e}") from e
 
         progress.success(f"Container '{name}' stopped successfully")
 
@@ -410,12 +416,15 @@ class ContainerService:
                 },
             )
         except IncusError as e:
-            raise OperationError(f"Failed to mount home directory: {e}")
+            raise OperationError(f"Failed to mount home directory: {e}") from e
 
         # Create group
         progress.info(f"Creating group '{username}' (gid={gid})")
         result = subprocess.run(
-            ["incus", "exec", container_name, "--", "groupadd", "-o", "-g", str(gid), username],
+            [
+                "incus", "exec", container_name, "--", "groupadd", "-o", "-g",
+                str(gid), username,
+            ],
             capture_output=True,
             text=True,
         )
@@ -463,7 +472,7 @@ class ContainerService:
                 mode="0440",
             )
         except IncusError as e:
-            raise OperationError(f"Failed to configure sudo: {e}")
+            raise OperationError(f"Failed to configure sudo: {e}") from e
 
         # Check if session mode is enabled
         instance = await self._incus.get_instance(container_name)
@@ -473,7 +482,10 @@ class ContainerService:
         if session_mode:
             progress.info(f"Enabling linger for '{username}' (session mode)")
             result = subprocess.run(
-                ["incus", "exec", container_name, "--", "loginctl", "enable-linger", username],
+                [
+                    "incus", "exec", container_name, "--", "loginctl",
+                    "enable-linger", username,
+                ],
                 capture_output=True,
                 text=True,
             )
@@ -483,9 +495,13 @@ class ContainerService:
         # Mark user as mapped
         user_mapped_key = f"user.kapsule.host-users.{uid}.mapped"
         try:
-            await self._incus.patch_instance_config(container_name, {user_mapped_key: "true"})
+            await self._incus.patch_instance_config(
+                container_name, {user_mapped_key: "true"}
+            )
         except IncusError as e:
-            raise OperationError(f"Failed to update container config: {e}")
+            raise OperationError(
+                f"Failed to update container config: {e}"
+            ) from e
 
         progress.success(f"User '{username}' configured")
 
@@ -530,10 +546,10 @@ class ContainerService:
         try:
             instance = await self._incus.get_instance(name)
         except IncusError as e:
-            raise OperationError(f"Container '{name}' not found: {e}")
+            raise OperationError(f"Container '{name}' not found: {e}") from e
 
         config = instance.config or {}
-        
+
         # Determine kapsule mode
         if config.get(KAPSULE_DBUS_MUX_KEY) == "true":
             mode = "DbusMux"
@@ -541,9 +557,9 @@ class ContainerService:
             mode = "Session"
         else:
             mode = "Default"
-        
+
         image = config.get("image.description", config.get("image.os", "unknown"))
-        
+
         return (
             instance.name or name,
             instance.status or "Unknown",
@@ -663,14 +679,17 @@ class ContainerService:
             try:
                 op = await self._incus.start_instance(container_name, wait=True)
                 if op.status != "Success":
-                    return (False, f"Failed to start container: {op.err or op.status}", [])
+                    msg = op.err or op.status
+                    return (False, f"Failed to start container: {msg}", [])
             except IncusError as e:
                 return (False, f"Failed to start container: {e}", [])
 
         # Set up user if needed
         if not await self.is_user_setup(container_name, uid):
             try:
-                await self._setup_user_sync(container_name, uid, gid, username, home_dir)
+                await self._setup_user_sync(
+                    container_name, uid, gid, username, home_dir
+                )
             except OperationError as e:
                 return (False, str(e), [])
 
@@ -704,7 +723,10 @@ class ContainerService:
         # that are needed for PulseAudio/PipeWire socket discovery.
         whitelist_arg = ",".join(whitelist_keys) if whitelist_keys else ""
         if command:
-            exec_cmd = ["su", "-l", "-w", whitelist_arg, "-c", " ".join(command), username]
+            exec_cmd = [
+                "su", "-l", "-w", whitelist_arg, "-c", " ".join(command),
+                username,
+            ]
         else:
             exec_cmd = ["su", "-l", "-w", whitelist_arg, username]
 
@@ -752,9 +774,10 @@ class ContainerService:
         try:
             operation = await self._incus.create_instance(instance_config, wait=True)
             if operation.status != "Success":
-                raise OperationError(f"Creation failed: {operation.err or operation.status}")
+                err_msg = operation.err or operation.status
+                raise OperationError(f"Creation failed: {err_msg}")
         except IncusError as e:
-            raise OperationError(f"Failed to create container: {e}")
+            raise OperationError(f"Failed to create container: {e}") from e
 
         # Restore file capabilities stripped during image extraction
         await self._fix_file_capabilities(None, name)
@@ -792,11 +815,14 @@ class ContainerService:
                 },
             )
         except IncusError as e:
-            raise OperationError(f"Failed to mount home directory: {e}")
+            raise OperationError(f"Failed to mount home directory: {e}") from e
 
         # Create group
         subprocess.run(
-            ["incus", "exec", container_name, "--", "groupadd", "-o", "-g", str(gid), username],
+            [
+                "incus", "exec", container_name, "--", "groupadd", "-o", "-g",
+                str(gid), username,
+            ],
             capture_output=True,
         )
 
@@ -836,7 +862,7 @@ class ContainerService:
                 mode="0440",
             )
         except IncusError as e:
-            raise OperationError(f"Failed to configure sudo: {e}")
+            raise OperationError(f"Failed to configure sudo: {e}") from e
 
         # Check if session mode is enabled and enable linger
         instance = await self._incus.get_instance(container_name)
@@ -845,16 +871,23 @@ class ContainerService:
 
         if session_mode:
             subprocess.run(
-                ["incus", "exec", container_name, "--", "loginctl", "enable-linger", username],
+                [
+                    "incus", "exec", container_name, "--", "loginctl",
+                    "enable-linger", username,
+                ],
                 capture_output=True,
             )
 
         # Mark user as mapped
         user_mapped_key = f"user.kapsule.host-users.{uid}.mapped"
         try:
-            await self._incus.patch_instance_config(container_name, {user_mapped_key: "true"})
+            await self._incus.patch_instance_config(
+                container_name, {user_mapped_key: "true"}
+            )
         except IncusError as e:
-            raise OperationError(f"Failed to update container config: {e}")
+            raise OperationError(
+                f"Failed to update container config: {e}"
+            ) from e
 
     async def _setup_runtime_symlinks(
         self,
@@ -884,14 +917,14 @@ class ContainerService:
         host_runtime_dir = f"/.kapsule/host/run/user/{uid}"
 
         # Ensure container runtime dir exists
-        try:
-            await self._incus.mkdir(container_name, "/run/user", uid=0, gid=0, mode="0755")
-        except IncusError:
-            pass
-        try:
-            await self._incus.mkdir(container_name, runtime_dir, uid=uid, gid=gid, mode="0700")
-        except IncusError:
-            pass
+        with contextlib.suppress(IncusError):
+            await self._incus.mkdir(
+                container_name, "/run/user", uid=0, gid=0, mode="0755"
+            )
+        with contextlib.suppress(IncusError):
+            await self._incus.mkdir(
+                container_name, runtime_dir, uid=uid, gid=gid, mode="0700"
+            )
 
         # Symlink individual sockets from host runtime dir
         # Format: (item, is_env_var, source_subpath_override)
@@ -919,10 +952,10 @@ class ContainerService:
             source = f"{host_runtime_dir}/{subpath if subpath else socket_name}"
             target = f"{runtime_dir}/{socket_name}"
 
-            try:
-                await self._incus.create_symlink(container_name, target, source, uid=uid, gid=gid)
-            except IncusError:
-                pass  # Symlink might already exist
+            with contextlib.suppress(IncusError):
+                await self._incus.create_symlink(
+                    container_name, target, source, uid=uid, gid=gid
+                )
 
         # X11: symlink the individual socket from the host's /tmp/.X11-unix/
         # into the container. The host's /tmp is accessible via hostfs.
@@ -932,34 +965,29 @@ class ContainerService:
             x11_socket = f"X{display_num}"
             host_x11 = f"/.kapsule/host/tmp/.X11-unix/{x11_socket}"
             container_x11_dir = "/tmp/.X11-unix"
-            try:
+            with contextlib.suppress(IncusError):
                 await self._incus.mkdir(
                     container_name, container_x11_dir, uid=0, gid=0, mode="1777",
                 )
-            except IncusError:
-                pass
-            try:
+            with contextlib.suppress(IncusError):
                 await self._incus.create_symlink(
                     container_name, f"{container_x11_dir}/{x11_socket}", host_x11,
                     uid=0, gid=0,
                 )
-            except IncusError:
-                pass  # Symlink might already exist
 
         # PulseAudio: create a real pulse/ directory and symlink native inside.
         # PulseAudio refuses to use pulse/ if it's itself a symlink (security check).
         pulse_dir = f"{runtime_dir}/pulse"
         host_pulse_native = f"{host_runtime_dir}/pulse/native"
-        try:
-            await self._incus.mkdir(container_name, pulse_dir, uid=uid, gid=gid, mode="0700")
-        except IncusError:
-            pass
-        try:
-            await self._incus.create_symlink(
-                container_name, f"{pulse_dir}/native", host_pulse_native, uid=uid, gid=gid,
+        with contextlib.suppress(IncusError):
+            await self._incus.mkdir(
+                container_name, pulse_dir, uid=uid, gid=gid, mode="0700"
             )
-        except IncusError:
-            pass
+        with contextlib.suppress(IncusError):
+            await self._incus.create_symlink(
+                container_name, f"{pulse_dir}/native", host_pulse_native,
+                uid=uid, gid=gid,
+            )
 
         # XAUTHORITY: the env value is a full path (e.g. /run/user/1000/xauth_LAPpeP).
         # Symlink just the basename inside the container's runtime dir to the
@@ -969,12 +997,10 @@ class ContainerService:
             xauth_basename = os.path.basename(xauth_path)
             host_xauth = f"{host_runtime_dir}/{xauth_basename}"
             target_xauth = f"{runtime_dir}/{xauth_basename}"
-            try:
+            with contextlib.suppress(IncusError):
                 await self._incus.create_symlink(
                     container_name, target_xauth, host_xauth, uid=uid, gid=gid,
                 )
-            except IncusError:
-                pass  # Symlink might already exist
 
     # -------------------------------------------------------------------------
     # Private Helper Methods
@@ -1135,10 +1161,8 @@ class ContainerService:
         # Create the full directory hierarchy – most images don't ship
         # with Podman so /etc/containers/ won't exist yet.
         for d in (parent_dir, dropin_dir):
-            try:
+            with contextlib.suppress(IncusError):
                 await self._incus.mkdir(name, d, uid=0, gid=0, mode="0755")
-            except IncusError:
-                pass  # Directory might already exist
 
         try:
             await self._incus.push_file(
@@ -1193,10 +1217,8 @@ class ContainerService:
 
         # Create systemd user drop-in directory
         dropin_dir = "/etc/systemd/user/dbus.socket.d"
-        try:
+        with contextlib.suppress(IncusError):
             await self._incus.mkdir(name, dropin_dir, uid=0, gid=0, mode="0755")
-        except IncusError:
-            pass  # Directory might already exist
 
         # Create the drop-in file
         systemd_socket_path = KAPSULE_DBUS_SOCKET_SYSTEMD.format(container=name)
@@ -1209,9 +1231,11 @@ ListenStream={systemd_socket_path}
 """
         dropin_file = f"{dropin_dir}/kapsule.conf"
         try:
-            await self._incus.push_file(name, dropin_file, dropin_content, uid=0, gid=0, mode="0644")
+            await self._incus.push_file(
+                name, dropin_file, dropin_content, uid=0, gid=0, mode="0644"
+            )
         except IncusError as e:
-            raise OperationError(f"Failed to configure D-Bus socket: {e}")
+            raise OperationError(f"Failed to configure D-Bus socket: {e}") from e
 
         # Set up D-Bus multiplexer if requested
         if dbus_mux:
@@ -1220,7 +1244,10 @@ ListenStream={systemd_socket_path}
         # Reload systemd
         progress.info("Reloading systemd user configuration...")
         subprocess.run(
-            ["incus", "exec", name, "--", "systemctl", "--user", "--global", "daemon-reload"],
+            [
+                "incus", "exec", name, "--", "systemctl", "--user", "--global",
+                "daemon-reload",
+            ],
             capture_output=True,
         )
 
@@ -1234,10 +1261,8 @@ ListenStream={systemd_socket_path}
         progress.info("Installing kapsule-dbus-mux.service for D-Bus multiplexing")
 
         service_dir = "/etc/systemd/user"
-        try:
+        with contextlib.suppress(IncusError):
             await self._incus.mkdir(name, service_dir, uid=0, gid=0, mode="0755")
-        except IncusError:
-            pass  # Directory might already exist
 
         container_dbus_socket = KAPSULE_DBUS_SOCKET_SYSTEMD.format(container=name)
         host_dbus_socket = "unix:path=/.kapsule/host%t/bus"
@@ -1266,12 +1291,19 @@ WantedBy=default.target
 
         service_file = f"{service_dir}/kapsule-dbus-mux.service"
         try:
-            await self._incus.push_file(name, service_file, service_content, uid=0, gid=0, mode="0644")
+            await self._incus.push_file(
+                name, service_file, service_content, uid=0, gid=0, mode="0644"
+            )
         except IncusError as e:
-            raise OperationError(f"Failed to install dbus-mux service: {e}")
+            raise OperationError(
+                f"Failed to install dbus-mux service: {e}"
+            ) from e
 
         progress.info("Enabling kapsule-dbus-mux.service globally")
         subprocess.run(
-            ["incus", "exec", name, "--", "systemctl", "--user", "--global", "enable", "kapsule-dbus-mux.service"],
+            [
+                "incus", "exec", name, "--", "systemctl", "--user", "--global",
+                "enable", "kapsule-dbus-mux.service",
+            ],
             capture_output=True,
         )

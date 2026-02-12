@@ -9,7 +9,6 @@ Provides container management services over D-Bus.
 
 __version__ = "0.1.0"
 
-from .service import KapsuleService, KapsuleManagerInterface
 from .container_service import ContainerService
 from .operations import (
     MessageType,
@@ -17,6 +16,7 @@ from .operations import (
     OperationReporter,
     operation,
 )
+from .service import KapsuleManagerInterface, KapsuleService
 
 __all__ = [
     "ContainerService",

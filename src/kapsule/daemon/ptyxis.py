@@ -6,8 +6,8 @@ If Ptyxis is not installed, all operations are no-ops.
 
 from __future__ import annotations
 
-import uuid as uuid_mod
 import logging
+import uuid as uuid_mod
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,18 @@ def create_ptyxis_profile(container_name: str) -> str | None:
         profiles.append(profile_uuid)
         main.set_value("profile-uuids", GLib.Variant("as", profiles))
 
-        logger.info("Created Ptyxis profile %s for container %s", profile_uuid, container_name)
+        logger.info(
+            "Created Ptyxis profile %s for container %s",
+            profile_uuid,
+            container_name,
+        )
         return profile_uuid
     except Exception:
-        logger.debug("Failed to create Ptyxis profile for %s", container_name, exc_info=True)
+        logger.debug(
+            "Failed to create Ptyxis profile for %s",
+            container_name,
+            exc_info=True,
+        )
         return None
 
 

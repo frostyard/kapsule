@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-from dbus_fast.aio import MessageBus
+import os
+
 from dbus_fast import BusType
+from dbus_fast.aio import MessageBus
 
-from .exceptions import DaemonNotRunning, ContainerError
-
+from .exceptions import DaemonNotRunning
 
 BUS_NAME = "org.frostyard.Kapsule"
 OBJ_PATH = "/org/frostyard/Kapsule"
 MANAGER_IFACE = "org.frostyard.Kapsule.Manager"
+
+
+def _default_bus_type() -> BusType:
+    val = os.environ.get("KAPSULE_BUS", "system").lower()
+    if val == "session":
+        return BusType.SESSION
+    return BusType.SYSTEM
 
 
 class KapsuleClient:
@@ -19,20 +27,26 @@ class KapsuleClient:
     Usage:
         async with KapsuleClient() as client:
             containers = await client.list_containers()
+
+    Set KAPSULE_BUS=session to connect to the session bus.
     """
 
-    def __init__(self):
+    def __init__(self, bus_type: BusType | None = None):
+        self._bus_type = bus_type or _default_bus_type()
         self._bus: MessageBus | None = None
         self._iface = None
 
     async def __aenter__(self):
         try:
-            self._bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+            self._bus = await MessageBus(
+                bus_type=self._bus_type
+            ).connect()
         except Exception as e:
             raise DaemonNotRunning() from e
 
-        proxy = await self._bus.get_proxy_object(
-            BUS_NAME, OBJ_PATH,
+        introspection = await self._bus.introspect(BUS_NAME, OBJ_PATH)
+        proxy = self._bus.get_proxy_object(
+            BUS_NAME, OBJ_PATH, introspection
         )
         self._iface = proxy.get_interface(MANAGER_IFACE)
         return self

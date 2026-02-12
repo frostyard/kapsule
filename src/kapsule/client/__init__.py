@@ -2,10 +2,10 @@
 
 from .client import KapsuleClient
 from .exceptions import (
-    KapsuleError,
-    DaemonNotRunning,
-    ContainerNotFound,
     ContainerError,
+    ContainerNotFound,
+    DaemonNotRunning,
+    KapsuleError,
 )
 
 __all__ = [
