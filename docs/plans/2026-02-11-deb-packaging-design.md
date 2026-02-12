@@ -19,7 +19,7 @@ The user handles uploading the built `.deb` to their own Debian repository via a
 5. Run `nfpm package --packager deb`
 6. Upload the `.deb` as a workflow artifact
 
-**Version:** Extracted from the git tag by stripping the `v` prefix. Passed to nfpm via `NFPM_VERSION` environment variable.
+**Version:** Extracted from the git tag. Passed to nfpm via `VERSION` environment variable. nfpm's semver parser strips the `v` prefix automatically.
 
 ## File Layout Inside the .deb
 
@@ -105,7 +105,7 @@ Orchestrates the staging before nfpm runs:
 At the repo root. Key fields:
 
 - **name:** `kapsule`
-- **version:** `${NFPM_VERSION}` (from environment, set by CI from git tag)
+- **version:** `${VERSION}` (from environment, set by CI from git tag)
 - **arch:** `amd64`
 - **maintainer:** Frostyard
 - **description:** Incus-based container management with GNOME integration
