@@ -1,60 +1,60 @@
 <!--
-SPDX-FileCopyrightText: 2026 Lasath Fernando <devel@lasath.org>
+SPDX-FileCopyrightText: 2026 Frostyard
 
 SPDX-License-Identifier: CC-BY-SA-4.0
 -->
 
 # Kapsule Architecture
 
-Kapsule is an Incus-based container manager with native KDE/Plasma integration, designed for KDE Linux. It provides a distrobox-like experience with emphasis on nested containerization and seamless desktop integration.
+Kapsule is an Incus-based container manager with native GNOME integration. It provides a distrobox-like experience with emphasis on nested containerization and seamless desktop integration.
 
 ## Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                         User Applications (C++)                              │
+│                     User-Facing Components (Python/GJS)                      │
 │                                                                              │
-│   ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────────────┐  │
-│   │  kapsule CLI    │    │    Konsole      │    │ KCM / KIO (planned)     │  │
-│   │  (main.cpp)     │    │  Integration    │    │                         │  │
-│   └────────┬────────┘    └────────┬────────┘    └────────────┬────────────┘  │
-│            │                      │                          │               │
-│            └──────────────────────┼──────────────────────────┘               │
-│                                   │                                          │
-│                          ┌────────▼────────┐                                 │
-│                          │  libkapsule-qt  │                                 │
-│                          │  KapsuleClient  │                                 │
-│                          └────────┬────────┘                                 │
-└───────────────────────────────────┼──────────────────────────────────────────┘
-                                    │ D-Bus (system bus)
-                                    │ org.frostyard.Kapsule
-┌───────────────────────────────────▼─────────────────────────────────────────┐
-│                        kapsule-daemon (Python)                              │
-│                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ org.frostyard.Kapsule.Manager                                             │   │
+│   ┌─────────────────┐  ┌────────────────┐  ┌───────────────────────────────┐ │
+│   │  kapsule CLI    │  │ GNOME Shell    │  │ Settings App (GTK4/Adwaita)  │ │
+│   │  (typer/rich)   │  │ Extension      │  │                               │ │
+│   └────────┬────────┘  └───────┬────────┘  └──────────────┬────────────────┘ │
+│            │                   │                           │                  │
+│            └───────────────────┼───────────────────────────┘                  │
+│                                │                                             │
+│                       ┌────────▼────────┐                                    │
+│                       │ kapsule.client  │  ┌──────────────┐                  │
+│                       │ (dbus-fast)     │  │ Nautilus Ext  │                  │
+│                       └────────┬────────┘  └──────┬───────┘                  │
+└────────────────────────────────┼──────────────────┼──────────────────────────┘
+                                 │ D-Bus (system bus)
+                                 │ org.frostyard.Kapsule
+┌────────────────────────────────▼─────────────────────────────────────────────┐
+│                        kapsule-daemon (Python)                               │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐   │
+│   │ org.frostyard.Kapsule.Manager                                       │   │
 │   │ ├── Properties: Version                                             │   │
 │   │ └── Methods: CreateContainer, DeleteContainer, StartContainer, ...  │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │ org.frostyard.Kapsule.Operation (per-operation objects)                   │   │
-│   │ Path: /org/frostyard/Kapsule/operations/{id}                              │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐   │
+│   │ org.frostyard.Kapsule.Operation (per-operation objects)              │   │
+│   │ Path: /org/frostyard/Kapsule/operations/{id}                        │   │
 │   │ ├── Properties: Id, Type, Description, Target, Status               │   │
 │   │ ├── Signals: Message, ProgressStarted, ProgressUpdate, ...          │   │
 │   │ └── Methods: Cancel                                                 │   │
-│   └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
 │   ┌─────────────────┐    ┌─────────────────┐    ┌────────────────────────┐  │
 │   │ ContainerService│──▶│  IncusClient    │    │  OperationTracker      │  │
 │   │ (operations)    │    │  (REST client)  │    │  (D-Bus objects)       │  │
 │   └─────────────────┘    └────────┬────────┘    └────────────────────────┘  │
-└───────────────────────────────────┼─────────────────────────────────────────┘
+└───────────────────────────────────┼──────────────────────────────────────────┘
                                     │ HTTP over Unix socket
                                     │ /var/lib/incus/unix.socket
 ┌───────────────────────────────────▼──────────────────────────────────────────┐
 │                            Incus Daemon                                      │
-│                    (container lifecycle, images, storage)                    │
+│                    (container lifecycle, images, storage)                     │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,11 +62,13 @@ Kapsule is an Incus-based container manager with native KDE/Plasma integration, 
 
 | Component | Language | Purpose |
 |-----------|----------|---------|
-| `kapsule` CLI | C++ | User-facing command-line interface |
-| `libkapsule-qt` | C++ | Qt/QCoro library for D-Bus communication |
+| `kapsule` CLI | Python (typer) | User-facing command-line interface |
+| `kapsule.client` | Python | Async D-Bus client library |
 | `kapsule-daemon` | Python | System service bridging D-Bus and Incus |
-| Konsole Integration | C++/QML | Terminal container integration (planned) |
-| KCM Module | QML/C++ | System Settings integration (planned) |
+| GNOME Shell extension | GJS | Top bar container indicator |
+| Nautilus extension | Python | Right-click menu integration |
+| Settings app | Python (GTK4/Adw) | Container management GUI |
+| Ptyxis integration | Python | Auto-create terminal profiles |
 
 ---
 
@@ -84,15 +86,26 @@ The daemon is the heart of Kapsule. It runs as a systemd system service (`kapsul
 ### Module Structure
 
 ```
-src/daemon/
-├── __main__.py          # Entry point: python -m kapsule.daemon
-├── service.py           # KapsuleManagerInterface (D-Bus service)
-├── container_service.py # Container lifecycle operations
-├── operations.py        # @operation decorator, progress reporting
-├── incus_client.py      # Typed async Incus REST client
-├── models_generated.py  # Pydantic models from Incus OpenAPI spec
-├── config.py            # User configuration handling
-└── dbus_types.py        # D-Bus type annotations
+src/kapsule/
+├── __init__.py
+├── daemon/
+│   ├── __main__.py          # Entry point: python -m kapsule.daemon
+│   ├── service.py           # KapsuleManagerInterface (D-Bus service)
+│   ├── container_service.py # Container lifecycle operations
+│   ├── operations.py        # @operation decorator, progress reporting
+│   ├── incus_client.py      # Typed async Incus REST client
+│   ├── ptyxis.py            # Ptyxis terminal profile management
+│   ├── models_generated.py  # Pydantic models from Incus OpenAPI spec
+│   ├── config.py            # User configuration handling
+│   └── dbus_types.py        # D-Bus type annotations
+├── client/
+│   ├── __init__.py          # KapsuleClient, exceptions
+│   ├── client.py            # Async D-Bus client
+│   └── exceptions.py        # Exception hierarchy
+└── cli/
+    ├── __init__.py
+    ├── app.py               # Typer CLI application
+    └── output.py            # Rich output formatting
 ```
 
 ### D-Bus Interface Design
@@ -185,99 +198,6 @@ This allows the daemon to:
 
 ---
 
-## libkapsule-qt (C++)
-
-A Qt6 library providing async D-Bus communication using QCoro coroutines.
-
-### Key Classes
-
-#### KapsuleClient
-
-Main entry point for container management:
-
-```cpp
-class KapsuleClient : public QObject {
-    // Async coroutine API
-    QCoro::Task<QList<Container>> listContainers();
-    QCoro::Task<Container> container(const QString &name);
-    
-    QCoro::Task<OperationResult> createContainer(
-        const QString &name,
-        const QString &image,
-        ContainerMode mode = ContainerMode::Default,
-        ProgressHandler progress = {});
-    
-    QCoro::Task<EnterResult> prepareEnter(
-        const QString &containerName = {},
-        const QStringList &command = {});
-    
-    // ...
-};
-```
-
-#### Container
-
-Implicitly-shared value class representing a container:
-
-```cpp
-class Container {
-    Q_GADGET
-    Q_PROPERTY(QString name READ name)
-    Q_PROPERTY(State state READ state)
-    Q_PROPERTY(QString image READ image)
-    Q_PROPERTY(ContainerMode mode READ mode)
-    // ...
-};
-```
-
-#### Progress Handling
-
-Callbacks receive progress from operation D-Bus signals:
-
-```cpp
-using ProgressHandler = std::function<void(MessageType, const QString &, int)>;
-
-// Usage
-co_await client.createContainer("dev", "ubuntu:24.04",
-    ContainerMode::Default,
-    [](MessageType type, const QString &msg, int indent) {
-        // Display progress to user
-    });
-```
-
----
-
-## kapsule CLI (C++)
-
-The CLI is a thin layer over `libkapsule-qt`, handling argument parsing and terminal output.
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `init` | Initialize Incus (one-time, runs as root) |
-| `create <name>` | Create a new container |
-| `enter [name]` | Enter a container (interactive shell) |
-| `list` | List containers |
-| `start <name>` | Start a stopped container |
-| `stop <name>` | Stop a running container |
-| `rm <name>` | Remove a container |
-| `config` | Show configuration |
-
-### Terminal Output
-
-Uses [rang.hpp](src/cli/rang.hpp) for colored terminal output and a custom `Output` class for consistent formatting:
-
-```cpp
-auto &o = out();
-o.info("Creating container...");
-o.success("Container created!");
-o.error("Something went wrong");
-o.hint("Is the daemon running? Try: systemctl status kapsule-daemon");
-```
-
----
-
 ## Container Configuration
 
 Kapsule applies configuration directly to each container at creation time
@@ -339,8 +259,5 @@ default_image = images:archlinux
 
 ## Future Work
 
-- **Konsole Integration** - Container profiles and quick-access in terminal
-- **KCM Module** - System Settings integration  
-- **KIO Worker** - File manager integration
 - **Polkit Integration** - Fine-grained authorization
 - **Session Mode** - Container-local D-Bus with host forwarding

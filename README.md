@@ -1,20 +1,20 @@
 <!--
-SPDX-FileCopyrightText: 2026 Lasath Fernando <devel@lasath.org>
+SPDX-FileCopyrightText: 2026 Frostyard
 
 SPDX-License-Identifier: CC-BY-SA-4.0
 -->
 
 # Kapsule
 
-Incus-based container management with native KDE/Plasma integration.
+Incus-based container management with native GNOME integration.
 
-A distrobox-like tool using Incus as the container/VM backend, designed for KDE Linux.
+A distrobox-like tool using Incus as the container/VM backend, with deep GNOME desktop integration.
 
 ## Features
 
 - **Nested containerization** - Create containers that can run Docker/Podman inside them
 - **Host integration** - Containers share your home directory, user account, environment, Wayland/PipeWire sockets, and D-Bus session
-- **KDE/Plasma integration** - Konsole integration, KIO worker, System Settings module (planned)
+- **GNOME integration** - Shell extension, Nautilus context menu, Ptyxis terminal profiles, GTK4 settings app
 
 ## Quick Start
 
@@ -35,37 +35,13 @@ kapsule enter my-dev
 
 ## Installation
 
-### For Development
-
 ```bash
 # Install with pip (editable mode)
 pip install -e .
+
+# Install GNOME extensions (Shell, Nautilus, desktop file)
+./scripts/install-gnome-extensions.sh
 ```
-
-### Using kde-builder
-
-Add to your `~/.config/kde-builder.yaml`:
-
-```yaml
-project kapsule:
-  repository: kde:fernando/kapsule
-  branch: master
-  cmake-options: -DBUILD_KDE_COMPONENTS=ON -DINSTALL_PYTHON_CLI=ON -DVENDOR_PYTHON_DEPS=ON
-```
-
-Then run:
-
-```bash
-kde-builder kapsule
-```
-
-#### CMake Options
-
-| Option | Description |
-|--------|-------------|
-| `BUILD_KDE_COMPONENTS` | Build Qt/KDE libraries (libkapsule-qt) |
-| `INSTALL_PYTHON_CLI` | Install the Python CLI tool |
-| `VENDOR_PYTHON_DEPS` | Bundle Python dependencies with the installation |
 
 ## Commands
 
@@ -106,7 +82,7 @@ See available images at: https://images.linuxcontainers.org
 
 ## How It Works
 
-Kapsule creates Incus containers with a special profile that enables:
+Kapsule creates Incus containers with settings that enable:
 
 1. **Security nesting** - Allows running Docker/Podman inside the container
 2. **Host networking** - Container shares the host's network namespace
@@ -120,11 +96,14 @@ On first `enter`, Kapsule automatically:
 
 ## Architecture
 
-Kapsule consists of:
+Kapsule is a pure Python project:
 
-- **kapsule CLI** (C++) - User-facing command-line tool
-- **libkapsule-qt** (C++) - Qt library for D-Bus communication
+- **kapsule CLI** (Python/typer) - User-facing command-line tool
+- **kapsule.client** (Python) - Async D-Bus client library
 - **kapsule-daemon** (Python) - System service bridging D-Bus and Incus REST API
+- **GNOME Shell extension** (GJS) - Top bar container indicator
+- **Nautilus extension** (Python) - Right-click menu integration
+- **Settings app** (GTK4/libadwaita) - Container management GUI
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed technical documentation.
 
@@ -133,13 +112,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed technical document
 - Python >= 3.11
 - Incus
 - systemd
+- GNOME 45+ (for Shell extension)
 
 ## License
 
-- Python code: GPL-3.0-or-later
-- libkapsule-qt: LGPL-2.1-or-later
-- Build system files: BSD-3-Clause
-
-## Contributing
-
-This project is part of KDE. See https://community.kde.org/Get_Involved for how to contribute.
+GPL-3.0-or-later
