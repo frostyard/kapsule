@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+  # packages: write
+  # issues: write
+  # id-token: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,3 +39,18 @@ jobs:
         with:
           name: kapsule-deb
           path: build/*.deb
+
+      - name: Publish to frostyard repo
+        uses: frostyard/repogen/.github/actions/publish-to-r2@main
+        with:
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-bucket: frostyardrepo
+          purge-cache: "true"
+          cloudflare-zone: ${{ secrets.CLOUDFLARE_ZONE }}
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          gpg-private-key: ${{ secrets.REPOGEN_GPG_KEY }}
+          packages-dir: ./build
+          package-type: deb # or sysext
+          base-url: https://repository.frostyard.org # required for sysext
