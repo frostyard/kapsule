@@ -1,7 +1,7 @@
 version = 1
 SPDX-PackageName = "Kapsule"
 SPDX-PackageSupplier = "Lasath Fernando <devel@lasath.org>"
-SPDX-PackageDownloadLocation = "https://invent.kde.org/fernie/kapsule"
+SPDX-PackageDownloadLocation = "https://github.com/frostyard/kapsule"
 
 [[annotations]]
 path = ".github/instructions/**"
