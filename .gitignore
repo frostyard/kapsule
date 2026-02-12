@@ -11,3 +11,7 @@ arch-container
 build/
 dist/
 .worktrees
+.ruff_cache
+.venv
+venv
+__pycache__
