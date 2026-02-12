@@ -59,7 +59,7 @@ dev = [
 [project.scripts]
 kapsule = "kapsule.cli:app"
 kap = "kapsule.cli:app"
-kapsule-daemon = "kapsule.daemon.__main__:main"
+kapsule-daemon = "kapsule.daemon.__main__:run"
 
 [project.urls]
 Repository = "https://github.com/frostyard/kapsule"

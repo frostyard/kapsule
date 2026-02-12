@@ -6,7 +6,7 @@
 
 [Unit]
 Description=Kapsule Container Manager Daemon (System)
-Documentation=https://invent.kde.org/fernando/kapsule
+Documentation=https://github.com/frostyard/kapsule
 After=incus.service dbus.service
 Wants=incus.service
 
