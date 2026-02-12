@@ -418,45 +418,66 @@ class ContainerService:
         except IncusError as e:
             raise OperationError(f"Failed to mount home directory: {e}") from e
 
-        # Create group
-        progress.info(f"Creating group '{username}' (gid={gid})")
+        # Check if another user already owns this UID and rename it
         result = subprocess.run(
             [
-                "incus", "exec", container_name, "--", "groupadd", "-o", "-g",
-                str(gid), username,
+                "incus", "exec", container_name, "--",
+                "bash", "-c", f"getent passwd {uid} | cut -d: -f1",
             ],
             capture_output=True,
             text=True,
         )
-        if result.returncode != 0 and "already exists" not in result.stderr:
-            progress.warning(f"groupadd: {result.stderr.strip()}")
+        existing_user = result.stdout.strip()
+        if existing_user and existing_user != username:
+            progress.info(
+                f"Renaming existing user '{existing_user}' to '{username}'"
+            )
+            subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "usermod", "-l", username, "-d", container_home,
+                    "-m", existing_user,
+                ],
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "groupmod", "-n", username, existing_user,
+                ],
+                capture_output=True,
+            )
+        else:
+            # Create group
+            progress.info(f"Creating group '{username}' (gid={gid})")
+            result = subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "groupadd", "-o", "-g", str(gid), username,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0 and "already exists" not in result.stderr:
+                progress.warning(f"groupadd: {result.stderr.strip()}")
 
-        # Create user
-        progress.info(f"Creating user '{username}' (uid={uid})")
-        result = subprocess.run(
-            [
-                "incus",
-                "exec",
-                container_name,
-                "--",
-                "useradd",
-                "-o",  # Allow duplicate UID
-                "-M",  # Don't create home directory
-                "-u",
-                str(uid),
-                "-g",
-                str(gid),
-                "-d",
-                container_home,
-                "-s",
-                "/bin/bash",
-                username,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0 and "already exists" not in result.stderr:
-            progress.warning(f"useradd: {result.stderr.strip()}")
+            # Create user
+            progress.info(f"Creating user '{username}' (uid={uid})")
+            result = subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "useradd", "-o", "-M",
+                    "-u", str(uid),
+                    "-g", str(gid),
+                    "-d", container_home,
+                    "-s", "/bin/bash",
+                    username,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0 and "already exists" not in result.stderr:
+                progress.warning(f"useradd: {result.stderr.strip()}")
 
         # Configure passwordless sudo
         progress.info(f"Configuring passwordless sudo for '{username}'")
@@ -817,37 +838,56 @@ class ContainerService:
         except IncusError as e:
             raise OperationError(f"Failed to mount home directory: {e}") from e
 
-        # Create group
-        subprocess.run(
+        # Check if another user already owns this UID and rename it
+        result = subprocess.run(
             [
-                "incus", "exec", container_name, "--", "groupadd", "-o", "-g",
-                str(gid), username,
+                "incus", "exec", container_name, "--",
+                "bash", "-c", f"getent passwd {uid} | cut -d: -f1",
             ],
             capture_output=True,
+            text=True,
         )
+        existing_user = result.stdout.strip()
+        if existing_user and existing_user != username:
+            # Rename existing user and its primary group
+            subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "usermod", "-l", username, "-d", container_home,
+                    "-m", existing_user,
+                ],
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "groupmod", "-n", username, existing_user,
+                ],
+                capture_output=True,
+            )
+        else:
+            # Create group
+            subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "groupadd", "-o", "-g", str(gid), username,
+                ],
+                capture_output=True,
+            )
 
-        # Create user
-        subprocess.run(
-            [
-                "incus",
-                "exec",
-                container_name,
-                "--",
-                "useradd",
-                "-o",
-                "-M",
-                "-u",
-                str(uid),
-                "-g",
-                str(gid),
-                "-d",
-                container_home,
-                "-s",
-                "/bin/bash",
-                username,
-            ],
-            capture_output=True,
-        )
+            # Create user
+            subprocess.run(
+                [
+                    "incus", "exec", container_name, "--",
+                    "useradd", "-o", "-M",
+                    "-u", str(uid),
+                    "-g", str(gid),
+                    "-d", container_home,
+                    "-s", "/bin/bash",
+                    username,
+                ],
+                capture_output=True,
+            )
 
         # Configure passwordless sudo
         sudoers_content = f"{username} ALL=(ALL) NOPASSWD:ALL\n"

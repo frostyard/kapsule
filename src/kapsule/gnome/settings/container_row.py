@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import subprocess
 import threading
 
@@ -79,10 +81,13 @@ class ContainerRow(Adw.ActionRow):
         threading.Thread(target=run, daemon=True).start()
 
     def _on_enter(self, button):
-        subprocess.Popen(
-            ["ptyxis", f"--tab-with-profile-name={self._name}"],
-            start_new_session=True,
-        )
+        kapsule_bin = shutil.which("kapsule") or "kapsule"
+        cmd = ["ptyxis", "--"]
+        bus = os.environ.get("KAPSULE_BUS", "")
+        if bus:
+            cmd += ["env", f"KAPSULE_BUS={bus}"]
+        cmd += [kapsule_bin, "enter", self._name]
+        subprocess.Popen(cmd, start_new_session=True)
 
     def _on_start(self, button):
         async def _start():
